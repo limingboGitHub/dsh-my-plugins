@@ -1,0 +1,18 @@
+node_modules/
+*.log
+*.tgz
+*.tsbuildinfo
+
+# 本地凭据与实例配置，绝不入库
+.npmrc
+feishu.config.json
+.dsh-feishu/
+*.local
+.env
+
+# 运行时数据
+token-usage-ledger.jsonl
+
+package-lock.json
+pnpm-lock.yaml
+.DS_Store

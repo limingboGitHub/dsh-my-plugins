@@ -1,0 +1,6 @@
+# Self-mounting bundle patch: adding this package as a profile dependency is
+# enough to mount it, so installers never hand-edit a cordis config.
+
+- insert:
+    - id: token-usage-stats
+      name: '@lmber/dsh-token-usage-stats'
