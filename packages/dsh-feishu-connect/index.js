@@ -396,6 +396,17 @@ export function apply(ctx) {
             console.log('[feishu] dedicated session preset mount failed: ' + String(error && error.message || error))
           }
         }
+        // Inject Feishu tool usage guidance (cc-connect convention): ordinary
+        // text replies are automatically delivered to Feishu; only use feishu
+        // tools for generated media/files the user must see.
+        const systemPrompt = agentCtx.get('systemPrompt')
+        if (systemPrompt) {
+          agentCtx.effect(() => systemPrompt.section({
+            name: 'feishu:tool-usage',
+            order: 200,
+            text: `You are connected to a Feishu (Lark) chat. Your normal text responses are automatically delivered to the user — just reply normally. DO NOT use feishu_send for ordinary text replies. Only use feishu_send_media to deliver generated images, videos, audio, or files that the user must see. When you send media through feishu_send_media, you may return "NO_REPLY" as your final text to suppress the automatic text delivery.`,
+          }))
+        }
       },
     })
   }
@@ -414,6 +425,15 @@ export function apply(ctx) {
           presets.composeFrom(agentCtx, mainAgent.ctx)
         } catch (error) {
           console.log('[feishu] resumed session composeFrom failed: ' + String(error && error.message || error))
+        }
+        // Re-inject Feishu tool usage guidance after resume
+        const systemPrompt = agentCtx.get('systemPrompt')
+        if (systemPrompt) {
+          agentCtx.effect(() => systemPrompt.section({
+            name: 'feishu:tool-usage',
+            order: 200,
+            text: `You are connected to a Feishu (Lark) chat. Your normal text responses are automatically delivered to the user — just reply normally. DO NOT use feishu_send for ordinary text replies. Only use feishu_send_media to deliver generated images, videos, audio, or files that the user must see. When you send media through feishu_send_media, you may return "NO_REPLY" as your final text to suppress the automatic text delivery.`,
+          }))
         }
       },
     })
