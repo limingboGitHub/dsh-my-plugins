@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.6.0] - 2025-01-XX
+
+实时交错投递：每段文字产生时立即发送，而非等 turn 结束。
+
+### Fixed
+- **时序错误**：1.5.0 收集所有文字段后在 turn 结束时一次性拼接发送，但媒体在工具执行时就已经
+  走了，所以飞书总是先收到所有附件、再收到一条合并的文字气泡（实际顺序是「文本1 → 图片 →
+  文本2 → 视频 → 文本3」，用户看到的却是「图片、视频、然后所有文字」）。
+- 现在用 `session/event` 观察器在每个 `assistant/message` 产生时立即投递它的文字，保持与
+  工具调用（包括媒体发送）的真实交错顺序。
+
+### Changed
+- 投递日志改为每段一行 `segment N to <chatId> (msg <messageId>): status=200`，末尾汇总
+  `nothing to deliver` 或段数。
+- `collectTurn` 删除，改为 `deliverableText(message, chatId)` 按单条 `assistant/message`
+  判断该段文字是否可投递（排除 `NO_REPLY` 和同会话 `feishu_send` 已原样发过的那一段）。
+
 ## [1.5.0] - 2025-01-XX
 
 投递规则改为「会话里说的每一句都送到飞书」，不再由桥接判断该不该吞。

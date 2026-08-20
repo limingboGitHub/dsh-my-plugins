@@ -556,64 +556,31 @@ export function apply(ctx) {
   // everything worth saying (cc-connect NO_REPLY convention).
   const NO_REPLY = 'NO_REPLY'
 
-  // Collect everything the agent said during one turn, plus the text that
-  // `feishu_send` already put into THIS chat.
+  // The text of one `assistant/message` that should reach the chat, or ''.
   //
-  // Every assistant text segment is kept, not just the last. A turn that uses
-  // tools produces several `assistant/message` events (a sentence before the
-  // call, the result, then a closing sentence); keeping only the final one drops
-  // the narration around media sends.
-  //
-  // Media sends never remove text: an attachment cannot carry its own
-  // explanation. Text already delivered by a same-chat `feishu_send` is recorded
-  // so it can be dropped per segment, instead of discarding the whole turn.
-  //
-  // `tool/call` is its own session event and the same call also appears as a
-  // `tool-call` block in `assistant/message`; both are read (a turn cut short
-  // between them still counts) and deduplicated by call id.
-  function collectTurn(events, fromSeq, chatId) {
-    const segments = []
-    const seenCalls = new Set()
-    const alreadySent = []
-    // A feishu_send without an explicit chatId goes to the bot's most recent
-    // chat, which is this one during its own turn.
-    const noteCall = (callId, name, rawArguments) => {
-      if (name !== 'feishu_send') return
-      if (callId !== undefined) {
-        if (seenCalls.has(callId)) return
-        seenCalls.add(callId)
-      }
-      const parsed = parseJsonObject(rawArguments) || {}
-      const target = typeof parsed.chatId === 'string' ? parsed.chatId : ''
-      if (target.length > 0 && target !== chatId) return
-      if (typeof parsed.text === 'string' && parsed.text.trim().length > 0) {
-        alreadySent.push(parsed.text.trim())
+  // The agent loop appends this event and only THEN executes the tool calls it
+  // requested, so the same message already carries the `tool-call` blocks of
+  // those pending calls. A `feishu_send` that will deliver this exact text to
+  // this chat is therefore visible here, and its text is not repeated.
+  function deliverableText(message, chatId) {
+    const blocks = message && message.content ? message.content : []
+    let text = ''
+    const sentHere = []
+    for (const block of blocks) {
+      if (!block) continue
+      if (block.type === 'text' && typeof block.text === 'string') text += block.text
+      if (block.type === 'tool-call' && block.name === 'feishu_send') {
+        // No explicit chatId means the bot's most recent chat, which is this one.
+        const parsed = parseJsonObject(block.arguments) || {}
+        const target = typeof parsed.chatId === 'string' ? parsed.chatId : ''
+        if ((target.length === 0 || target === chatId) && typeof parsed.text === 'string') {
+          sentHere.push(parsed.text.trim())
+        }
       }
     }
-    for (let i = fromSeq; i < events.length; i++) {
-      const event = events[i]
-      if (!event) continue
-      if (event.type === 'tool/call') {
-        const data = event.data || {}
-        noteCall(data.callId, data.name, data.arguments)
-        continue
-      }
-      if (event.type !== 'assistant/message') continue
-      const message = event.data && event.data.message
-      const blocks = message && message.content ? message.content : []
-      let text = ''
-      for (const block of blocks) {
-        if (!block) continue
-        if (block.type === 'text' && typeof block.text === 'string') text += block.text
-        if (block.type === 'tool-call') noteCall(block.id, block.name, block.arguments)
-      }
-      const trimmed = text.trim()
-      if (trimmed.length > 0) segments.push(trimmed)
-    }
-    // Drop only what feishu_send already delivered verbatim, and the sentinel.
-    const deliverable = segments.filter((segment) =>
-      segment !== NO_REPLY && !alreadySent.includes(segment))
-    return { reply: deliverable.join('\n\n'), segments, alreadySent }
+    const trimmed = text.trim()
+    if (trimmed.length === 0 || trimmed === NO_REPLY) return ''
+    return sentHere.includes(trimmed) ? '' : trimmed
   }
 
   async function handleFeishuMessage(bot, evt) {
@@ -677,13 +644,49 @@ export function apply(ctx) {
     // makes every chat's title the prefix and an opaque openId instead of the
     // actual request.
     const marker = openId ? '\n\n(via Feishu, sender ' + openId + ')' : '\n\n(via Feishu)'
-    const seqBefore = agent.session.events.length
     const message = {
       id: 'feishu-' + messageId,
       role: 'user',
       content: [{ type: 'text', text: text + marker }],
       source: { kind: 'user' },
     }
+    // Deliver each text segment as the agent produces it, not after the turn.
+    //
+    // The loop appends `assistant/message` and only then runs that step's tool
+    // calls, so a media send lands between two text segments. Collecting text
+    // until the turn ends put every attachment ahead of all narration (the
+    // observed "image, video, then all three replies in one bubble").
+    //
+    // Sends are chained through one promise so segments keep their order even
+    // though the observer itself cannot await.
+    let chain = Promise.resolve()
+    let delivered = 0
+    const deliverSegment = (text) => {
+      delivered++
+      const index = delivered
+      chain = chain.then(async () => {
+        try {
+          const res = await sendFeishuText(bot, chatId, text)
+          console.log('[feishu] segment ' + String(index) + ' to ' + chatId
+            + ' (msg ' + messageId + '): status=' + String(res.status))
+          if (res.status !== 200 && res.text) console.log('[feishu] send response: ' + res.text.slice(0, 500))
+        } catch (error) {
+          console.log('[feishu] segment ' + String(index) + ' failed for ' + messageId
+            + ': ' + String(error && error.message || error))
+        }
+      })
+    }
+
+    // Registered BEFORE send: the reaction call below awaits, and the first
+    // assistant/message can land during that await. Only live events reach an
+    // observer, so no seq filtering is needed.
+    const offEvent = ctx.on('session/event', (session, event) => {
+      if (session !== agent.session) return
+      if (event.type !== 'assistant/message') return
+      const text = deliverableText(event.data && event.data.message, chatId)
+      if (text.length > 0) deliverSegment(text)
+    })
+
     agent.send(message, 'next-turn', true)
     console.log('[feishu] delivered ' + messageId + ' to agent ' + agent.id + ' (workspace ' + (agent.session.header && agent.session.header.cwd || '?') + ')')
 
@@ -717,33 +720,14 @@ export function apply(ctx) {
       await agent.whenIdle()
     } catch (error) {
       console.log('[feishu] turn wait failed for ' + messageId + ': ' + String(error && error.message || error))
-      removeReactionOnce()
-      return
+    } finally {
+      offEvent()
     }
 
-    const turn = collectTurn(agent.session.events, seqBefore, chatId)
-    // Everything the agent said reaches the chat. Nothing is withheld because
-    // media was sent; the only text not repeated is what feishu_send already
-    // delivered verbatim to this chat, and the NO_REPLY sentinel.
-    try {
-      if (turn.reply.length > 0) {
-        const res = await sendFeishuText(bot, chatId, turn.reply)
-        console.log('[feishu] reply to ' + chatId + ' (msg ' + messageId + '): status=' + String(res.status)
-          + ' (' + String(turn.segments.length) + ' segment(s)'
-          + (turn.alreadySent.length > 0 ? ', ' + String(turn.alreadySent.length) + ' already sent by feishu_send' : '')
-          + ')')
-        if (res.status !== 200 && res.text) console.log('[feishu] send response: ' + res.text.slice(0, 500))
-      } else {
-        console.log('[feishu] nothing to deliver for ' + messageId
-          + ' (' + String(turn.segments.length) + ' segment(s), '
-          + String(turn.alreadySent.length) + ' already sent by feishu_send)')
-      }
-    } catch (error) {
-      console.log('[feishu] send failed for ' + messageId + ': ' + String(error && error.message || error))
-    } finally {
-      // reply delivered (or send failed) -> stop the typing reaction now
-      removeReactionOnce()
-    }
+    // Let the queued sends finish before dropping the typing reaction.
+    await chain
+    if (delivered === 0) console.log('[feishu] nothing to deliver for ' + messageId)
+    removeReactionOnce()
   }
 
   function normalizeEvent(data) {
