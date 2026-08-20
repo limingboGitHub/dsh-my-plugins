@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.4] - 2025-01-XX
+
+### Fixed
+- **修复 1.4.3 引入的回归**：`feishu_send_media` 发送附件后，随附的文字说明被吞掉。
+  1.4.3 的抑制逻辑只要看到任一 feishu 工具就吞掉文本，但 `feishu_send_media` 投递的
+  是附件，文字说明本该与附件共存。现在只有**同会话的 `feishu_send`** 才抑制（它投递
+  的是文本，会与自动回复重复）；`feishu_send_media` 和发往其他会话的 `feishu_send` 都
+  不再抑制。
+- **会话标题变成"错误会话"或截断 openId**：桥接把 `[飞书 ou_...]` 放在消息开头，而
+  会话标题从第一条 user/message 的开头几个词截取，结果标题吃掉的是前缀而不是实际请求。
+  现在把发送者标记移到消息末尾 `(via Feishu, sender ou_...)`，标题恢复正常。
+
+### Changed
+- 抑制原因日志改为 `text already sent by feishu_send`（明确是文本重复，而非所有工具）。
+
 ## [1.4.3] - 2025-01-XX
 
 ### Fixed
@@ -14,8 +29,7 @@
   **其他**会话，`feishu_send_media` 用于附件（附件无法走 reply text）。
 
 ### Changed
-- 抑制日志改为单行并说明具体原因（`delivered by feishu_send_media` / `NO_REPLY sentinel` /
-  `no text reply`）；移除 1.4.2 的逐事件调试输出（一个 turn 会打印 40+ 行 `assistant/chunk`）。
+- 抑制日志改为单行并说明具体原因（1.4.4 进一步改进）；移除 1.4.2 的逐事件调试输出。
 
 ## [1.4.2] - 2025-01-XX
 

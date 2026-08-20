@@ -553,30 +553,46 @@ export function apply(ctx) {
   }
 
   // ---- bridge: Feishu message -> agent turn -> reply back to Feishu ----
-  // Tools that already deliver to Feishu themselves. When the agent used one in
-  // the turn, the bridge must NOT also auto-deliver its final text, otherwise
-  // the chat receives the same answer twice (once from the tool, once from the
-  // bridge) and the agent appears to be talking to two different people.
-  const FEISHU_DELIVERY_TOOLS = new Set(['feishu_send', 'feishu_send_media'])
-
-  // The sentinel an agent may reply with when everything worth saying was
-  // already delivered through a tool call (cc-connect NO_REPLY convention).
+  // The sentinel an agent may reply with when a tool call already said
+  // everything worth saying (cc-connect NO_REPLY convention).
   const NO_REPLY = 'NO_REPLY'
 
-  // Scan one turn's events for the text to deliver and for feishu tool calls the
-  // model already delivered through. `tool/call` is its own session event; the
-  // same call also appears as a `tool-call` block inside `assistant/message`.
-  // Both are read because a turn cut short between the two still counts as
-  // delivered, and a missed detection is what produces a duplicate message.
-  function collectTurn(events, fromSeq) {
+  // Scan one turn for the text to deliver and for `feishu_send` calls that
+  // already put text into THIS chat.
+  //
+  // Only same-chat `feishu_send` duplicates the auto-delivered reply.
+  // `feishu_send_media` carries attachments, which cannot travel in reply text,
+  // so its accompanying sentence must still be delivered; and `feishu_send`
+  // aimed at another chat says nothing to this one.
+  //
+  // `tool/call` is its own session event and the same call also appears as a
+  // `tool-call` block in `assistant/message`; both are read (a turn cut short
+  // between them still counts) and deduplicated by call id.
+  function collectTurn(events, fromSeq, chatId) {
     let reply = ''
-    const toolsUsed = []
+    const seenCalls = new Set()
+    const sameChatSends = []
+    // A feishu_send without an explicit chatId goes to the bot's most recent
+    // chat, which is this one during its own turn.
+    const targetsThisChat = (rawArguments) => {
+      const parsed = parseJsonObject(rawArguments)
+      const target = parsed && typeof parsed.chatId === 'string' ? parsed.chatId : ''
+      return target.length === 0 || target === chatId
+    }
+    const noteCall = (callId, name, rawArguments) => {
+      if (name !== 'feishu_send') return
+      if (callId !== undefined) {
+        if (seenCalls.has(callId)) return
+        seenCalls.add(callId)
+      }
+      if (targetsThisChat(rawArguments)) sameChatSends.push(name)
+    }
     for (let i = fromSeq; i < events.length; i++) {
       const event = events[i]
       if (!event) continue
       if (event.type === 'tool/call') {
-        const name = event.data && event.data.name
-        if (FEISHU_DELIVERY_TOOLS.has(name)) toolsUsed.push(name)
+        const data = event.data || {}
+        noteCall(data.callId, data.name, data.arguments)
         continue
       }
       if (event.type !== 'assistant/message') continue
@@ -586,11 +602,11 @@ export function apply(ctx) {
       for (const block of blocks) {
         if (!block) continue
         if (block.type === 'text' && typeof block.text === 'string') text += block.text
-        if (block.type === 'tool-call' && FEISHU_DELIVERY_TOOLS.has(block.name)) toolsUsed.push(block.name)
+        if (block.type === 'tool-call') noteCall(block.id, block.name, block.arguments)
       }
       if (text.trim().length > 0) reply = text
     }
-    return { reply: reply.trim(), deliveredByTool: toolsUsed.length > 0, toolsUsed }
+    return { reply: reply.trim(), sameChatSends }
   }
 
   async function handleFeishuMessage(bot, evt) {
@@ -649,12 +665,16 @@ export function apply(ctx) {
     }
 
     const openId = evt.sender && evt.sender.sender_id && evt.sender.sender_id.open_id || ''
-    const label = openId ? '[飞书 ' + openId + '] ' : '[飞书消息] '
+    // The sender marker trails the message: the session title is derived from
+    // the leading words of the first user message, so a leading `[飞书 ou_...]`
+    // makes every chat's title the prefix and an opaque openId instead of the
+    // actual request.
+    const marker = openId ? '\n\n(via Feishu, sender ' + openId + ')' : '\n\n(via Feishu)'
     const seqBefore = agent.session.events.length
     const message = {
       id: 'feishu-' + messageId,
       role: 'user',
-      content: [{ type: 'text', text: label + text }],
+      content: [{ type: 'text', text: text + marker }],
       source: { kind: 'user' },
     }
     agent.send(message, 'next-turn', true)
@@ -694,10 +714,11 @@ export function apply(ctx) {
       return
     }
 
-    const turn = collectTurn(agent.session.events, seqBefore)
-    // Suppression, in order: a feishu tool already delivered this turn (its call
-    // IS the reply), the explicit NO_REPLY sentinel, or no text at all.
-    const reason = turn.deliveredByTool ? 'delivered by ' + turn.toolsUsed.join(', ')
+    const turn = collectTurn(agent.session.events, seqBefore, chatId)
+    // Suppression, in order: feishu_send already put text into this chat, the
+    // explicit NO_REPLY sentinel, or no text at all. Media sends do NOT suppress
+    // — an attachment cannot carry its own explanation.
+    const reason = turn.sameChatSends.length > 0 ? 'text already sent by feishu_send'
       : turn.reply === NO_REPLY ? 'NO_REPLY sentinel'
       : turn.reply.length === 0 ? 'no text reply'
       : undefined
