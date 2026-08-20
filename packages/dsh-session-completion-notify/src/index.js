@@ -9,5 +9,5 @@
 /** Plugin name shown in the Cordis loader and inspection surfaces. */
 export const name = 'dsh-session-completion-notify'
 
-/** Host plugin body — intentionally inert; the browser half does the work. */
+/** Host plugin body - intentionally inert; the browser half does the work. */
 export function apply() {}
