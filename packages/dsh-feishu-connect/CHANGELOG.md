@@ -1,14 +1,32 @@
 # Changelog
 
+## [1.4.3] - 2025-01-XX
+
+### Fixed
+- **投递约定提示词此前从未真正注入**：1.4.1/1.4.2 把注入写在 `setup` 的早期返回之后。
+  主会话（`feishu-main-*`）的 `mainAgent` 为 `undefined`，`resumeDedicated` 的
+  `if (!mainAgent) return` 直接跳过了注入；`createDedicated` 的 `if (!presets) return`
+  同理。注入现在是两个 `setup` 的第一步，与 preset 组合结果无关。
+- **抑制检测补上 `tool/call` 事件**：`tool/call` 是独立的 session 事件，`assistant/message`
+  里的 `tool-call` block 只是同一次调用的另一处记录。只读后者时，在两者之间被中断的
+  turn 会漏判为"未投递"并重复发送。两处现在都读。
+- 提示词改写为明确的投递约定：final reply 会被自动送达，`feishu_send` 仅用于发往
+  **其他**会话，`feishu_send_media` 用于附件（附件无法走 reply text）。
+
+### Changed
+- 抑制日志改为单行并说明具体原因（`delivered by feishu_send_media` / `NO_REPLY sentinel` /
+  `no text reply`）；移除 1.4.2 的逐事件调试输出（一个 turn 会打印 40+ 行 `assistant/chunk`）。
+
+## [1.4.2] - 2025-01-XX
+
+### Changed
+- 加入逐事件调试日志用于定位双重回复（已在 1.4.3 收敛）。
+
 ## [1.4.1] - 2025-01-XX
 
 ### Fixed
-- **修复双重回复问题的根本原因**：在 Agent 的系统提示词中注入飞书工具使用指南
-  - 明确告知 Agent："普通文本回复会自动发送给用户，无需使用 feishu_send"
-  - 说明 feishu_send_media 仅用于发送生成的图片、视频、音频或文件
-  - 支持 NO_REPLY 约定来显式抑制自动回复
-  - 同时在 create 和 resume 时注入，确保重启后不丢失
-- 保留 1.4.0 的桥接检测逻辑作为双保险（防御性编程）
+- 尝试在系统提示词中注入飞书工具使用指南（注入位置有误，实际未生效，见 1.4.3）。
+- 保留 1.4.0 的桥接检测逻辑作为双保险（防御性编程）。
 
 ## [1.4.0] - 2025-01-XX
 

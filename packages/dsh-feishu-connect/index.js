@@ -362,6 +362,39 @@ export function apply(ctx) {
     return undefined
   }
 
+  // ---- delivery contract ----
+  // The bridge already forwards each turn's final assistant text to the chat.
+  // Without this the model reasonably assumes it must deliver its own answer,
+  // calls feishu_send, and the chat receives the same content twice. The
+  // bridge-side suppression in collectTurn() is the safety net for a model that
+  // ignores this; both layers are required.
+  const DELIVERY_CONTRACT = [
+    'You are talking to a user in a Feishu (Lark) chat through a bridge.',
+    '',
+    'Your final reply text for each turn is delivered to that chat automatically.',
+    'Write it as your normal answer to the user; do NOT call feishu_send to say it.',
+    'Calling feishu_send for your own answer makes the user receive it twice.',
+    '',
+    'Use feishu_send only to reach a DIFFERENT chat or bot than the one you are answering.',
+    'Use feishu_send_media to deliver local image, video, audio, or file paths, because',
+    'attachments cannot travel in reply text. After sending media, reply with a short',
+    'sentence about it, or exactly NO_REPLY to send nothing further.',
+  ].join('\n')
+
+  function injectDeliveryContract(agentCtx, phase) {
+    const systemPrompt = agentCtx.get('systemPrompt')
+    if (!systemPrompt) {
+      console.log('[feishu] ' + phase + ': systemPrompt unavailable, delivery contract not injected')
+      return
+    }
+    agentCtx.effect(() => systemPrompt.section({
+      name: 'feishu:delivery-contract',
+      order: 200,
+      text: DELIVERY_CONTRACT,
+    }))
+    console.log('[feishu] ' + phase + ': injected feishu:delivery-contract')
+  }
+
   // ---- dedicated per-chat sessions (cc-connect style) ----
   const defaultAgentOptions = () => {
     const selection = ctx.get('agentDefaultModel')
@@ -384,6 +417,9 @@ export function apply(ctx) {
       },
       ...defaultAgentOptions() ? { agentOptions: defaultAgentOptions() } : {},
       setup: async (agentCtx) => {
+        // Injected FIRST: preset composition below has early returns, and the
+        // delivery contract must reach the model even when no preset mounts.
+        injectDeliveryContract(agentCtx, 'create')
         const presets = agentCtx.get('agentPresets')
         if (!presets) return
         if (mainAgent) {
@@ -396,19 +432,6 @@ export function apply(ctx) {
             console.log('[feishu] dedicated session preset mount failed: ' + String(error && error.message || error))
           }
         }
-        // Inject Feishu tool usage guidance (cc-connect convention): ordinary
-        // text replies are automatically delivered to Feishu; only use feishu
-        // tools for generated media/files the user must see.
-        const systemPrompt = agentCtx.get('systemPrompt')
-        console.log('[feishu] setup: systemPrompt service available =', !!systemPrompt)
-        if (systemPrompt) {
-          agentCtx.effect(() => systemPrompt.section({
-            name: 'feishu:tool-usage',
-            order: 200,
-            text: `You are connected to a Feishu (Lark) chat. Your normal text responses are automatically delivered to the user — just reply normally. DO NOT use feishu_send for ordinary text replies. Only use feishu_send_media to deliver generated images, videos, audio, or files that the user must see. When you send media through feishu_send_media, you may return "NO_REPLY" as your final text to suppress the automatic text delivery.`,
-          }))
-          console.log('[feishu] setup: injected feishu:tool-usage system prompt section')
-        }
       },
     })
   }
@@ -420,6 +443,9 @@ export function apply(ctx) {
       resumeSessionId: sessionId,
       ...defaultAgentOptions() ? { agentOptions: defaultAgentOptions() } : {},
       setup: async (agentCtx) => {
+        // Injected FIRST: a resumed main session has no parent agent, and the
+        // `!mainAgent` return below would otherwise skip the contract entirely.
+        injectDeliveryContract(agentCtx, 'resume')
         if (!mainAgent) return
         const presets = agentCtx.get('agentPresets')
         if (!presets) return
@@ -427,17 +453,6 @@ export function apply(ctx) {
           presets.composeFrom(agentCtx, mainAgent.ctx)
         } catch (error) {
           console.log('[feishu] resumed session composeFrom failed: ' + String(error && error.message || error))
-        }
-        // Re-inject Feishu tool usage guidance after resume
-        const systemPrompt = agentCtx.get('systemPrompt')
-        console.log('[feishu] resume setup: systemPrompt service available =', !!systemPrompt)
-        if (systemPrompt) {
-          agentCtx.effect(() => systemPrompt.section({
-            name: 'feishu:tool-usage',
-            order: 200,
-            text: `You are connected to a Feishu (Lark) chat. Your normal text responses are automatically delivered to the user — just reply normally. DO NOT use feishu_send for ordinary text replies. Only use feishu_send_media to deliver generated images, videos, audio, or files that the user must see. When you send media through feishu_send_media, you may return "NO_REPLY" as your final text to suppress the automatic text delivery.`,
-          }))
-          console.log('[feishu] resume setup: injected feishu:tool-usage system prompt section')
         }
       },
     })
@@ -548,35 +563,34 @@ export function apply(ctx) {
   // already delivered through a tool call (cc-connect NO_REPLY convention).
   const NO_REPLY = 'NO_REPLY'
 
+  // Scan one turn's events for the text to deliver and for feishu tool calls the
+  // model already delivered through. `tool/call` is its own session event; the
+  // same call also appears as a `tool-call` block inside `assistant/message`.
+  // Both are read because a turn cut short between the two still counts as
+  // delivered, and a missed detection is what produces a duplicate message.
   function collectTurn(events, fromSeq) {
     let reply = ''
-    let deliveredByTool = false
-    console.log('[feishu] collectTurn: scanning from seq', fromSeq, 'total events', events.length)
+    const toolsUsed = []
     for (let i = fromSeq; i < events.length; i++) {
       const event = events[i]
       if (!event) continue
-      console.log('[feishu] collectTurn: event', i, 'type =', event.type)
+      if (event.type === 'tool/call') {
+        const name = event.data && event.data.name
+        if (FEISHU_DELIVERY_TOOLS.has(name)) toolsUsed.push(name)
+        continue
+      }
       if (event.type !== 'assistant/message') continue
       const message = event.data && event.data.message
       const blocks = message && message.content ? message.content : []
-      console.log('[feishu] collectTurn: assistant/message at', i, 'blocks =', blocks.length)
       let text = ''
       for (const block of blocks) {
         if (!block) continue
-        console.log('[feishu] collectTurn: block type =', block.type, block.type === 'tool-call' ? 'name=' + block.name : '')
         if (block.type === 'text' && typeof block.text === 'string') text += block.text
-        if (block.type === 'tool-call' && FEISHU_DELIVERY_TOOLS.has(block.name)) {
-          console.log('[feishu] collectTurn: DETECTED feishu delivery tool:', block.name)
-          deliveredByTool = true
-        }
+        if (block.type === 'tool-call' && FEISHU_DELIVERY_TOOLS.has(block.name)) toolsUsed.push(block.name)
       }
-      if (text.trim().length > 0) {
-        console.log('[feishu] collectTurn: captured text reply, length =', text.length)
-        reply = text
-      }
+      if (text.trim().length > 0) reply = text
     }
-    console.log('[feishu] collectTurn: final reply length =', reply.trim().length, 'deliveredByTool =', deliveredByTool)
-    return { reply: reply.trim(), deliveredByTool }
+    return { reply: reply.trim(), deliveredByTool: toolsUsed.length > 0, toolsUsed }
   }
 
   async function handleFeishuMessage(bot, evt) {
@@ -681,16 +695,15 @@ export function apply(ctx) {
     }
 
     const turn = collectTurn(agent.session.events, seqBefore)
-    // Suppression rules, in order:
-    // 1. the agent already delivered through a feishu tool -> deliver nothing
-    //    (the tool call IS the reply; auto-delivery would duplicate it),
-    // 2. an explicit NO_REPLY sentinel -> deliver nothing,
-    // 3. otherwise deliver the final assistant text.
-    const suppressed = turn.deliveredByTool || turn.reply === NO_REPLY || turn.reply.length === 0
+    // Suppression, in order: a feishu tool already delivered this turn (its call
+    // IS the reply), the explicit NO_REPLY sentinel, or no text at all.
+    const reason = turn.deliveredByTool ? 'delivered by ' + turn.toolsUsed.join(', ')
+      : turn.reply === NO_REPLY ? 'NO_REPLY sentinel'
+      : turn.reply.length === 0 ? 'no text reply'
+      : undefined
     try {
-      if (suppressed) {
-        console.log('[feishu] auto-reply suppressed for ' + messageId
-          + (turn.deliveredByTool ? ' (already delivered by a feishu tool)' : ' (no text reply)'))
+      if (reason !== undefined) {
+        console.log('[feishu] auto-reply suppressed for ' + messageId + ' (' + reason + ')')
       } else {
         const res = await sendFeishuText(bot, chatId, turn.reply)
         console.log('[feishu] reply to ' + chatId + ' (msg ' + messageId + '): status=' + String(res.status))
