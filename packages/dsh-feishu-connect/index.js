@@ -363,22 +363,21 @@ export function apply(ctx) {
   }
 
   // ---- delivery contract ----
-  // The bridge already forwards each turn's final assistant text to the chat.
-  // Without this the model reasonably assumes it must deliver its own answer,
-  // calls feishu_send, and the chat receives the same content twice. The
-  // bridge-side suppression in collectTurn() is the safety net for a model that
-  // ignores this; both layers are required.
+  // The bridge forwards everything the agent says to the chat. Without this the
+  // model assumes it must deliver its own answer, calls feishu_send, and the
+  // user receives the same words twice.
   const DELIVERY_CONTRACT = [
     'You are talking to a user in a Feishu (Lark) chat through a bridge.',
     '',
-    'Your final reply text for each turn is delivered to that chat automatically.',
-    'Write it as your normal answer to the user; do NOT call feishu_send to say it.',
+    'Everything you say in a turn is delivered to that chat automatically.',
+    'Just answer normally; do NOT call feishu_send to say it.',
     'Calling feishu_send for your own answer makes the user receive it twice.',
     '',
-    'Use feishu_send only to reach a DIFFERENT chat or bot than the one you are answering.',
-    'Use feishu_send_media to deliver local image, video, audio, or file paths, because',
-    'attachments cannot travel in reply text. After sending media, reply with a short',
-    'sentence about it, or exactly NO_REPLY to send nothing further.',
+    'Use feishu_send_media for local image, video, audio, or file paths, because',
+    'attachments cannot travel in text. Keep writing normally around it — your',
+    'words are delivered whether or not you send media.',
+    '',
+    'Use feishu_send only to reach a DIFFERENT chat than the one you are answering.',
   ].join('\n')
 
   function injectDeliveryContract(agentCtx, phase) {
@@ -557,35 +556,39 @@ export function apply(ctx) {
   // everything worth saying (cc-connect NO_REPLY convention).
   const NO_REPLY = 'NO_REPLY'
 
-  // Scan one turn for the text to deliver and for `feishu_send` calls that
-  // already put text into THIS chat.
+  // Collect everything the agent said during one turn, plus the text that
+  // `feishu_send` already put into THIS chat.
   //
-  // Only same-chat `feishu_send` duplicates the auto-delivered reply.
-  // `feishu_send_media` carries attachments, which cannot travel in reply text,
-  // so its accompanying sentence must still be delivered; and `feishu_send`
-  // aimed at another chat says nothing to this one.
+  // Every assistant text segment is kept, not just the last. A turn that uses
+  // tools produces several `assistant/message` events (a sentence before the
+  // call, the result, then a closing sentence); keeping only the final one drops
+  // the narration around media sends.
+  //
+  // Media sends never remove text: an attachment cannot carry its own
+  // explanation. Text already delivered by a same-chat `feishu_send` is recorded
+  // so it can be dropped per segment, instead of discarding the whole turn.
   //
   // `tool/call` is its own session event and the same call also appears as a
   // `tool-call` block in `assistant/message`; both are read (a turn cut short
   // between them still counts) and deduplicated by call id.
   function collectTurn(events, fromSeq, chatId) {
-    let reply = ''
+    const segments = []
     const seenCalls = new Set()
-    const sameChatSends = []
+    const alreadySent = []
     // A feishu_send without an explicit chatId goes to the bot's most recent
     // chat, which is this one during its own turn.
-    const targetsThisChat = (rawArguments) => {
-      const parsed = parseJsonObject(rawArguments)
-      const target = parsed && typeof parsed.chatId === 'string' ? parsed.chatId : ''
-      return target.length === 0 || target === chatId
-    }
     const noteCall = (callId, name, rawArguments) => {
       if (name !== 'feishu_send') return
       if (callId !== undefined) {
         if (seenCalls.has(callId)) return
         seenCalls.add(callId)
       }
-      if (targetsThisChat(rawArguments)) sameChatSends.push(name)
+      const parsed = parseJsonObject(rawArguments) || {}
+      const target = typeof parsed.chatId === 'string' ? parsed.chatId : ''
+      if (target.length > 0 && target !== chatId) return
+      if (typeof parsed.text === 'string' && parsed.text.trim().length > 0) {
+        alreadySent.push(parsed.text.trim())
+      }
     }
     for (let i = fromSeq; i < events.length; i++) {
       const event = events[i]
@@ -604,9 +607,13 @@ export function apply(ctx) {
         if (block.type === 'text' && typeof block.text === 'string') text += block.text
         if (block.type === 'tool-call') noteCall(block.id, block.name, block.arguments)
       }
-      if (text.trim().length > 0) reply = text
+      const trimmed = text.trim()
+      if (trimmed.length > 0) segments.push(trimmed)
     }
-    return { reply: reply.trim(), sameChatSends }
+    // Drop only what feishu_send already delivered verbatim, and the sentinel.
+    const deliverable = segments.filter((segment) =>
+      segment !== NO_REPLY && !alreadySent.includes(segment))
+    return { reply: deliverable.join('\n\n'), segments, alreadySent }
   }
 
   async function handleFeishuMessage(bot, evt) {
@@ -715,20 +722,21 @@ export function apply(ctx) {
     }
 
     const turn = collectTurn(agent.session.events, seqBefore, chatId)
-    // Suppression, in order: feishu_send already put text into this chat, the
-    // explicit NO_REPLY sentinel, or no text at all. Media sends do NOT suppress
-    // — an attachment cannot carry its own explanation.
-    const reason = turn.sameChatSends.length > 0 ? 'text already sent by feishu_send'
-      : turn.reply === NO_REPLY ? 'NO_REPLY sentinel'
-      : turn.reply.length === 0 ? 'no text reply'
-      : undefined
+    // Everything the agent said reaches the chat. Nothing is withheld because
+    // media was sent; the only text not repeated is what feishu_send already
+    // delivered verbatim to this chat, and the NO_REPLY sentinel.
     try {
-      if (reason !== undefined) {
-        console.log('[feishu] auto-reply suppressed for ' + messageId + ' (' + reason + ')')
-      } else {
+      if (turn.reply.length > 0) {
         const res = await sendFeishuText(bot, chatId, turn.reply)
-        console.log('[feishu] reply to ' + chatId + ' (msg ' + messageId + '): status=' + String(res.status))
+        console.log('[feishu] reply to ' + chatId + ' (msg ' + messageId + '): status=' + String(res.status)
+          + ' (' + String(turn.segments.length) + ' segment(s)'
+          + (turn.alreadySent.length > 0 ? ', ' + String(turn.alreadySent.length) + ' already sent by feishu_send' : '')
+          + ')')
         if (res.status !== 200 && res.text) console.log('[feishu] send response: ' + res.text.slice(0, 500))
+      } else {
+        console.log('[feishu] nothing to deliver for ' + messageId
+          + ' (' + String(turn.segments.length) + ' segment(s), '
+          + String(turn.alreadySent.length) + ' already sent by feishu_send)')
       }
     } catch (error) {
       console.log('[feishu] send failed for ' + messageId + ': ' + String(error && error.message || error))

@@ -7,7 +7,7 @@
 ## 功能
 
 - **多机器人**：一个实例同时运行多个机器人，每个绑定一个工作区（workspace），独立长连接、会话状态与命令处理
-- **接收/发送**：飞书 `im.message.receive_v1` 长连接 → 注入 Agent 会话 → 回复以交互卡片（Markdown）发回同一会话；Agent 使用 `feishu_send` 或 `feishu_send_media` 工具主动发送时**不再重复自动回复**（检测到工具调用即抑制桥接自动回复，避免双重回复）
+- **接收/发送**：飞书 `im.message.receive_v1` 长连接 → 注入 Agent 会话 → Agent 在这一轮说的每段文字都以交互卡片（Markdown）发回同一会话；发送媒体不影响文字投递，只有同会话 `feishu_send` 已原样发过的那一段不再重复
 - **命令**：`/new [名称]` 新建独立会话、`/switch <序号>` 切换、`/list` 列出、`/help` 帮助（支持前缀匹配 `/n` `/sw` `/l` `/h`）
 - **会话**：每个飞书聊天拥有**独立专属的 Agent 会话池**（绝不串进 GUI 会话）；首条消息自动创建会话（绑定配置工作区，无需先在 GUI 打开）；每聊天会话持久化（重启后自动恢复）；`agents.create/resume` 均注入模型选项（修复 `{{model}}` 变量缺失）
 - **测试发送**：发到最近会话；扫码创建的机器人自动保存 owner open_id，测试发送会自动建立与该用户的单聊（无需先手动给机器人发消息）
@@ -149,7 +149,11 @@ feishu_send_media({ paths: ["/path/to/report.pdf", "/path/to/chart.png"] })
 feishu_send_media({ paths: ["/path/to/clip.webm"], kind: "video" })
 ```
 
-**自动抑制双重回复**：当 Agent 在一轮对话中调用了 `feishu_send` 或 `feishu_send_media`，桥接会检测到工具调用并**自动抑制**最终文本的自动回复，避免飞书收到两条消息（一条来自工具，一条来自桥接）。Agent 也可显式返回 `NO_REPLY` 来抑制回复（cc-connect 约定）。
+**投递规则**：Agent 在一轮里说的每一段文字都会送到飞书，按顺序用空行拼成一条消息。发送媒体**不会**影响文字投递 —— `feishu_send_media` 只负责附件，围绕它写的说明照常送达。
+
+不重复投递的只有两种情况：同会话的 `feishu_send` 已经原样发过的那一段（否则用户会收到两次），以及 `NO_REPLY` 哨兵本身。两者都按段丢弃，同一轮里的其他句子不受影响。
+
+因此 Agent 不需要用 `feishu_send` 回答当前会话 —— 正常作答即可。`feishu_send` 留给发往**其他**会话的场景。
 
 ## 开发
 
