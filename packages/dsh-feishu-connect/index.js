@@ -202,6 +202,149 @@ export function apply(ctx) {
     )
   }
 
+  // ---- media: upload local files to Feishu, then send them as native
+  //      image/media/audio/file messages (cc-connect SendImage/SendFile) ----
+  const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.avi', '.m4v', '.mkv', '.webm']
+  const AUDIO_EXTENSIONS = ['.ogg', '.opus', '.mp3', '.wav', '.m4a', '.aac']
+  const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']
+
+  const extensionOf = (path) => {
+    const base = String(path).replace(/\\/g, '/').split('/').pop() || ''
+    const dot = base.lastIndexOf('.')
+    return dot > 0 ? base.slice(dot).toLowerCase() : ''
+  }
+  const baseNameOf = (path) => (String(path).replace(/\\/g, '/').split('/').pop() || 'attachment')
+
+  // Feishu's file API accepts a fixed file_type vocabulary. Every video maps to
+  // 'mp4' so the bubble renders as a native player instead of a download link;
+  // playback compatibility for mkv/webm depends on the Feishu client.
+  function feishuFileType(path) {
+    const ext = extensionOf(path)
+    if (ext === '.pdf') return 'pdf'
+    if (ext === '.doc' || ext === '.docx') return 'doc'
+    if (ext === '.xls' || ext === '.xlsx' || ext === '.csv') return 'xls'
+    if (ext === '.ppt' || ext === '.pptx') return 'ppt'
+    if (VIDEO_EXTENSIONS.includes(ext)) return 'mp4'
+    if (ext === '.ogg' || ext === '.opus') return 'opus'
+    return 'stream'
+  }
+
+  // msg_type follows the resolved file_type: 'media' renders a video player,
+  // 'audio' a voice bubble, everything else a file card.
+  const feishuFileMsgType = (fileType) => fileType === 'mp4' ? 'media' : fileType === 'opus' ? 'audio' : 'file'
+
+  async function uploadMultipart(bot, url, fields) {
+    const accessToken = await tenantAccessToken(bot, bot.cfg.appId, bot.cfg.appSecret)
+    const form = new FormData()
+    for (const [key, value] of Object.entries(fields)) {
+      if (value && typeof value === 'object' && value.bytes !== undefined) {
+        form.append(key, new Blob([value.bytes]), value.fileName)
+      } else {
+        form.append(key, String(value))
+      }
+    }
+    let response
+    try {
+      response = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + accessToken }, body: form })
+    } catch (error) {
+      throw new Error('upload request failed: ' + String(error && error.message || error))
+    }
+    const text = await response.text()
+    const parsed = parseJsonObject(text)
+    if (!parsed || parsed.code !== 0) throw new Error('upload failed: ' + text.slice(0, 500))
+    return parsed.data || {}
+  }
+
+  async function uploadImageKey(bot, bytes, fileName) {
+    const data = await uploadMultipart(bot, 'https://open.feishu.cn/open-apis/im/v1/images', {
+      image_type: 'message',
+      image: { bytes, fileName: fileName || 'image.png' },
+    })
+    if (typeof data.image_key !== 'string') throw new Error('upload image: no image_key returned')
+    return data.image_key
+  }
+
+  async function uploadFileKey(bot, bytes, fileName, fileType) {
+    const data = await uploadMultipart(bot, 'https://open.feishu.cn/open-apis/im/v1/files', {
+      file_type: fileType,
+      file_name: fileName,
+      file: { bytes, fileName },
+    })
+    if (typeof data.file_key !== 'string') throw new Error('upload file: no file_key returned')
+    return data.file_key
+  }
+
+  async function sendRawMessage(bot, chatId, msgType, contentObject) {
+    const cfg = bot.cfg
+    const accessToken = await tenantAccessToken(bot, cfg.appId, cfg.appSecret)
+    const target = chatId || bot.lastChatId || ''
+    const type = target ? 'chat_id' : 'open_id'
+    const receiveId = target || cfg.ownerOpenId || ''
+    if (!receiveId) throw new Error('没有可用的 chat_id：先在飞书里给机器人发一条消息')
+    return httpJson(
+      'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=' + type,
+      'POST',
+      { 'Content-Type': 'application/json', Authorization: 'Bearer ' + accessToken },
+      { receive_id: receiveId, msg_type: msgType, content: JSON.stringify(contentObject) },
+    )
+  }
+
+  // Send one local path as the most native Feishu message type available.
+  // `kind` ('image' | 'video' | 'audio' | 'file') is the caller's intent; an
+  // extension that contradicts it still wins for file_type resolution so the
+  // bubble matches the real bytes.
+  async function sendLocalMedia(bot, chatId, path, kind) {
+    const cfg = bot.cfg
+    if (!(cfg.appId && cfg.appSecret)) throw new Error('未配置 appId/appSecret')
+    if (!existsSync(path)) throw new Error('文件不存在: ' + path)
+    const bytes = readFileSync(path)
+    const fileName = baseNameOf(path)
+    const ext = extensionOf(path)
+    const asImage = kind === 'image' || (kind === undefined && IMAGE_EXTENSIONS.includes(ext))
+    if (asImage && IMAGE_EXTENSIONS.includes(ext)) {
+      const imageKey = await uploadImageKey(bot, bytes, fileName)
+      return sendRawMessage(bot, chatId, 'image', { image_key: imageKey })
+    }
+    let fileType = feishuFileType(path)
+    if (kind === 'video' && fileType === 'stream') fileType = 'mp4'
+    if (kind === 'audio' && fileType === 'stream') fileType = 'opus'
+    const fileKey = await uploadFileKey(bot, bytes, fileName, fileType)
+    const msgType = feishuFileMsgType(fileType)
+    return sendRawMessage(bot, chatId, msgType, { file_key: fileKey })
+  }
+
+  // ---- inbound media: download a message resource so the agent can read it ----
+  async function downloadResource(bot, messageId, fileKey, type) {
+    const accessToken = await tenantAccessToken(bot, bot.cfg.appId, bot.cfg.appSecret)
+    const url = 'https://open.feishu.cn/open-apis/im/v1/messages/' + encodeURIComponent(messageId)
+      + '/resources/' + encodeURIComponent(fileKey) + '?type=' + type
+    const response = await fetch(url, { headers: { Authorization: 'Bearer ' + accessToken } })
+    if (!response.ok) {
+      throw new Error('resource download failed: ' + String(response.status) + ' ' + (await response.text()).slice(0, 300))
+    }
+    return Buffer.from(await response.arrayBuffer())
+  }
+
+  const IMAGE_MEDIA_TYPES = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+  }
+
+  // Persist an inbound attachment under the bot's workspace so file paths in the
+  // injected prompt stay readable by the agent's own fs tools.
+  function saveInboundFile(bot, messageId, fileName, bytes) {
+    const root = (bot.cfg.workspace && String(bot.cfg.workspace).trim()) || workspaceRoot() || homedir()
+    const dir = join(root, '.dsh', 'feishu-attachments', String(messageId).replace(/[^a-zA-Z0-9_-]/g, ''))
+    mkdirSync(dir, { recursive: true })
+    const safe = String(fileName || 'attachment').replace(/[\\/:*?"<>|]/g, '_') || 'attachment'
+    const target = join(dir, safe)
+    writeFileSync(target, bytes)
+    return target
+  }
+
   // ---- agent selection: the live agent whose session belongs to the bot's workspace ----
   const pickAgent = (workspace) => {
     const agents = ctx.get('agents')
@@ -371,8 +514,19 @@ export function apply(ctx) {
   }
 
   // ---- bridge: Feishu message -> agent turn -> reply back to Feishu ----
-  function extractReply(events, fromSeq) {
+  // Tools that already deliver to Feishu themselves. When the agent used one in
+  // the turn, the bridge must NOT also auto-deliver its final text, otherwise
+  // the chat receives the same answer twice (once from the tool, once from the
+  // bridge) and the agent appears to be talking to two different people.
+  const FEISHU_DELIVERY_TOOLS = new Set(['feishu_send', 'feishu_send_media'])
+
+  // The sentinel an agent may reply with when everything worth saying was
+  // already delivered through a tool call (cc-connect NO_REPLY convention).
+  const NO_REPLY = 'NO_REPLY'
+
+  function collectTurn(events, fromSeq) {
     let reply = ''
+    let deliveredByTool = false
     for (let i = fromSeq; i < events.length; i++) {
       const event = events[i]
       if (!event || event.type !== 'assistant/message') continue
@@ -380,11 +534,13 @@ export function apply(ctx) {
       const blocks = message && message.content ? message.content : []
       let text = ''
       for (const block of blocks) {
-        if (block && block.type === 'text' && typeof block.text === 'string') text += block.text
+        if (!block) continue
+        if (block.type === 'text' && typeof block.text === 'string') text += block.text
+        if (block.type === 'tool-call' && FEISHU_DELIVERY_TOOLS.has(block.name)) deliveredByTool = true
       }
       if (text.trim().length > 0) reply = text
     }
-    return reply.trim()
+    return { reply: reply.trim(), deliveredByTool }
   }
 
   async function handleFeishuMessage(bot, evt) {
@@ -398,6 +554,7 @@ export function apply(ctx) {
 
     if (evt.message_type !== 'text') {
       console.log('[feishu] ignore non-text message ' + messageId + ' (' + String(evt.message_type) + ')')
+      // Future: image/file download, persist, inject path into user message
       return
     }
     let text = ''
@@ -487,11 +644,22 @@ export function apply(ctx) {
       return
     }
 
-    const reply = extractReply(agent.session.events, seqBefore) || '（Agent 未产生文字回复）'
+    const turn = collectTurn(agent.session.events, seqBefore)
+    // Suppression rules, in order:
+    // 1. the agent already delivered through a feishu tool -> deliver nothing
+    //    (the tool call IS the reply; auto-delivery would duplicate it),
+    // 2. an explicit NO_REPLY sentinel -> deliver nothing,
+    // 3. otherwise deliver the final assistant text.
+    const suppressed = turn.deliveredByTool || turn.reply === NO_REPLY || turn.reply.length === 0
     try {
-      const res = await sendFeishuText(bot, chatId, reply)
-      console.log('[feishu] reply to ' + chatId + ' (msg ' + messageId + '): status=' + String(res.status))
-      if (res.status !== 200 && res.text) console.log('[feishu] send response: ' + res.text.slice(0, 500))
+      if (suppressed) {
+        console.log('[feishu] auto-reply suppressed for ' + messageId
+          + (turn.deliveredByTool ? ' (already delivered by a feishu tool)' : ' (no text reply)'))
+      } else {
+        const res = await sendFeishuText(bot, chatId, turn.reply)
+        console.log('[feishu] reply to ' + chatId + ' (msg ' + messageId + '): status=' + String(res.status))
+        if (res.status !== 200 && res.text) console.log('[feishu] send response: ' + res.text.slice(0, 500))
+      }
     } catch (error) {
       console.log('[feishu] send failed for ' + messageId + ': ' + String(error && error.message || error))
     } finally {
@@ -1139,7 +1307,7 @@ export function apply(ctx) {
   }))
 
   // ---- model tool: send a Feishu text message on demand ----
-  const tool = defineTool({
+  const textTool = defineTool({
     name: 'feishu_send',
     description: 'Send a text message to a Feishu chat through a configured app bot (~/.cc-connect/feishu.config.json). chatId is optional: it defaults to the most recent chat that messaged the bot. appId is optional: it selects which bot to use (defaults to the bot that last received a message).',
     parameters: {
@@ -1188,7 +1356,86 @@ export function apply(ctx) {
       }
     },
   })
-  ctx.effect(() => ctx.tools.register(tool))
+  ctx.effect(() => ctx.tools.register(textTool))
+
+  // ---- model tool: send local media/files to Feishu ----
+  const mediaTool = defineTool({
+    name: 'feishu_send_media',
+    description: 'Send a local image, video, audio, or file to a Feishu chat through a configured app bot. Use this to deliver generated or processed media that the user should see. chatId is optional: it defaults to the most recent chat. appId is optional: it selects which bot (defaults to the bot that last received a message).',
+    parameters: {
+      paths: {
+        type: 'array',
+        required: true,
+        items: { type: 'string' },
+        description: 'Absolute local file paths to send. Images (.png, .jpg, .webp, .gif) render as inline images; videos (.mp4, .mov, .webm, .mkv) as video players; audio (.ogg, .opus, .mp3, .m4a) as voice bubbles; everything else as file downloads.',
+      },
+      kind: {
+        type: 'string',
+        description: 'Optional hint: "image", "video", "audio", or "file". When omitted, the extension decides. When specified, overrides the default behavior (e.g. kind="video" forces .webm to render as a player instead of a download).',
+      },
+      chatId: { type: 'string', description: 'Target chat id (oc_...). Omit to send to the most recent chat that messaged the bot.' },
+      appId: { type: 'string', description: 'Bot app id (cli_...) to send through. Omit to use the bot that most recently received a message.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean', required: true },
+          sent: { type: 'number', required: true },
+          failed: { type: 'number', required: true },
+          detail: { type: 'string', required: true },
+        },
+        additionalProperties: false,
+      },
+      render: (args, value) => [{ type: 'text', text: 'feishu_send_media -> ' + JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const list = await readConfig()
+      const appId = typeof args.appId === 'string' && args.appId.length > 0 ? args.appId.trim() : undefined
+      let bot
+      if (appId) {
+        const cfg = list.find((c) => c.appId === appId)
+        if (!cfg) return { ok: false, sent: 0, failed: 0, detail: '未找到 appId=' + appId + ' 对应的机器人配置' }
+        bot = bots.get(appId) || makeBot(cfg)
+      } else {
+        let best = undefined
+        for (const b of bots.values()) {
+          if (b.lastChatId && (!best || b.lastChatId > best.lastChatId)) best = b
+        }
+        if (!best && list.length > 0) {
+          best = bots.get(list[0].appId) || makeBot(list[0])
+        }
+        if (!best) return { ok: false, sent: 0, failed: 0, detail: '没有配置任何机器人' }
+        bot = best
+      }
+      const chatId = typeof args.chatId === 'string' && args.chatId.length > 0 ? args.chatId : undefined
+      const kind = typeof args.kind === 'string' && args.kind.length > 0 ? args.kind : undefined
+      if (!Array.isArray(args.paths) || args.paths.length === 0) {
+        return { ok: false, sent: 0, failed: 0, detail: 'paths 参数必须是非空数组' }
+      }
+      let sent = 0
+      let failed = 0
+      const errors = []
+      for (const path of args.paths) {
+        if (typeof path !== 'string' || path.length === 0) {
+          failed++
+          errors.push('跳过无效路径')
+          continue
+        }
+        try {
+          await sendLocalMedia(bot, chatId, path, kind)
+          sent++
+        } catch (error) {
+          failed++
+          errors.push(String(error && error.message || error))
+        }
+      }
+      const detail = sent + ' 成功, ' + failed + ' 失败'
+        + (errors.length > 0 ? '; 错误: ' + errors.join('; ') : '')
+      return { ok: failed === 0, sent, failed, detail: detail.slice(0, 1000) }
+    },
+  })
+  ctx.effect(() => ctx.tools.register(mediaTool))
 
   // ---- lifecycle: one effect owns all helper processes and the drain timer ----
   ctx.effect(() => {
