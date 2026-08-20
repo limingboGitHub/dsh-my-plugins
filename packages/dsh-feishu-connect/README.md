@@ -28,7 +28,9 @@ dsh plugin --profile web add dsh-feishu-connect
 dsh plugin --profile web add github:limingboGitHub/dsh-feishu-connect
 ```
 
-> 首次安装若提示 `ERR_PNPM_IGNORED_BUILDS`（pnpm ≥10 默认拦截依赖的构建脚本，此处为 `protobufjs`）：编辑 `$DSH_HOME/profiles/web/pnpm-workspace.yaml`，把 `allowBuilds` 下的 `protobufjs` 从 `set this to true or false` 改为 `true`，然后重新执行上面的命令。忽略该提示不影响功能，但需要放行后重跑一次，`dsh plugin` 才会把本插件写入 profile。
+> **为什么需要 pnpm？** `dsh plugin` 是 `dsh web` 的插件管理入口，它在你的 profile 目录（`$DSH_HOME/profiles/web`）里调用 **pnpm** 来安装依赖并写入注册。这不是本插件的特殊要求——管理任意 `dsh plugin` 插件都走 pnpm。装一次即可：`npm i -g pnpm`（Windows 也可用 `corepack enable`/`winget install pnpm`）。如果完全不想装 pnpm，用下方「手动安装」方式把本包放入 profile 并用 cordis 补丁注册，同样可用。
+>
+> **首次安装若提示 `ERR_PNPM_IGNORED_BUILDS`（pnpm ≥10 默认拦截依赖的构建脚本，此处为 `protobufjs`）**：这是一个**警告**，不是安装失败——缺少构建产物时 lark SDK 的 WebSocket 部分无法工作，但其余功能不受影响。编辑 `$DSH_HOME/profiles/web/pnpm-workspace.yaml`，把 `allowBuilds` 下的 `protobufjs` 从 `set this to true or false` 改为 `true`，然后重新执行上面的命令；`dsh plugin` 才会把本插件写入 profile。
 
 `dsh plugin` 会自动完成三件事：把包安装进 profile 的 node_modules、把本包的 `cordis.patch.yml` 作为 bundle 补丁层挂到 profile、并把包名写进 `dsh.profile.bundles` —— 全程无需编辑任何配置文件。
 
@@ -40,7 +42,38 @@ dsh web
 
 然后在 **设置 → 飞书机器人** 填入 工作区 + AppID + AppSecret 并保存。配置写入 **`~/.cc-connect/feishu.config.json`**（与 cc-connect 相同的约定：全局配置在用户主目录，与任何代码仓库/工作区解耦），无需手动创建。会话状态持久化在 `~/.cc-connect/state.json`。
 
+### 换机迁移
+
+配置和会话状态都放在用户主目录，与代码仓库解耦，整体拷到新机器即可：
+
+```sh
+# 新机器上安装 dsh，然后：
+dsh plugin --profile web add dsh-feishu-connect
+# 把旧机器的 ~/.cc-connect/ 整个拷到新机器同目录下（内容含 feishu.config.json 与各 state-*.json）
+# 重启 dsh web 即可
+```
+
 **没有机器人？** 设置页点「生成二维码」→ 用飞书 App 扫码 → 自动创建机器人并回填 AppID/AppSecret → 点「保存配置」即完成绑定（飞书官方应用注册流程，无需去开放平台手动建应用；权限与事件订阅通常自动预配，建议在开放平台核验发布状态）。
+
+### 连接状态排查（重要）
+
+设置页的「连接状态」有几种取值：`connected`（长连接已建立）、`connecting`（helper 进程在运行，还没到 ready）、`idle`（helper 进程不在运行或已退出）、以及 `failed: ...` 或 `stopped: ...`（2.0 及以后，失败详情透传到页面上）。
+
+安装成功但一直 `connecting` 后变回 **`idle`** 的常见原因：
+
+1. **`protobufjs` 构建脚本被 pnpm 拦截**（最常见，极可能就是「换机后能用但连不上」的原因）。lark SDK 的 WebSocket 长连接需要 `protobufjs` 的构建产物（`lib/`），而 pnpm ≥10 默认不允许依赖运行构建脚本。检查你 profile 的 `pnpm-lock.yaml` 是否记录了依赖，并看 `$DSH_HOME/profiles/web/node_modules/protobufjs/` 下有没有 `lib/` 目录：
+   ```sh
+   # 没有 lib/ 目录 → 构建被跳过，按上面的 allowBuilds 放行后重新安装
+   ls $env:USERPROFILE\.dsh\profiles\web\node_modules\protobufjs
+   # 有 lib/ 目录 → 构建没问题，再看第 2 条
+   ```
+   处理完 `allowBuilds` 后**重新执行安装命令**并**重启 `dsh web`**（`dsh plugin` 安装完成后 helper 进程才会在启动时拉起；已运行的进程用的还是旧环境）。
+2. **AppID/AppSecret 错误**或**该机器网络无法访问飞书开放平台**（代理/防火墙）。凭据错误时 SDK 会返回 `code: 1000040345, app_id or app_secret is invalid`，helper 日志会打印，2.0 起状态页会直接显示 `failed: ...`。
+3. **事件订阅方式不是「使用长连接接收事件」**，或机器人应用未发布/缺少权限——这类配置问题在你自己机器上同样会失败，与换机无关。
+
+**判据**：一般「同配置在一台机器能连、另一台不能」的核心差异就是构建产物缺失或网络不同；先查 `protobufjs/lib` 是否存在，是 80% 的情况。
+
+### 手动安装备选
 
 > 手动安装（无 pnpm 环境）备选：把包放进 `$DSH_HOME/profiles/node_modules/`，在 profile 的 `cordis.patch.yml` 加入下面两行，重启即可：
 > ```yaml

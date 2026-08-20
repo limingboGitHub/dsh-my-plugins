@@ -3,7 +3,20 @@
 // Usage: node helper.js <appId> <appSecret>
 'use strict'
 
-const lark = require('@larksuiteoapi/node-sdk')
+// The SDK is required lazily: when the dependency is missing or broken the
+// helper still reports a JSON error line instead of crashing with a raw module
+// stack (which the parent's stdout drain would drop as a non-JSON line).
+let lark
+try {
+  lark = require('@larksuiteoapi/node-sdk')
+} catch (error) {
+  process.stdout.write(JSON.stringify({
+    type: 'error',
+    fatal: true,
+    message: 'lark sdk unavailable: ' + String((error && error.message) || error),
+  }) + '\n')
+  process.exit(1)
+}
 
 const appId = process.argv[2]
 const appSecret = process.argv[3]
@@ -53,4 +66,13 @@ setInterval(() => {
 client.start({ eventDispatcher: dispatcher }).catch((e) => {
   emit({ type: 'error', message: 'start failed: ' + String((e && e.message) || e) })
   process.exit(1)
+})
+
+// Last-resort guard: never die with a raw stack trace the parent cannot parse.
+process.on('uncaughtException', (error) => {
+  try {
+    emit({ type: 'error', fatal: true, message: 'uncaught: ' + String((error && error.message) || error) })
+  } catch {
+    /* stdout already broken; nothing more to report */
+  }
 })

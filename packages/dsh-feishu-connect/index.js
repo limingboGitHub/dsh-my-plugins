@@ -603,9 +603,26 @@ export function apply(ctx) {
           for (const line of read.delta.split('\n')) {
             const trimmed = line.trim()
             if (!trimmed) continue
+            // Raw lines the helper was unable to json-encode (dependency
+            // module stacks, SDK logs) still get surfaced instead of being
+            // silently dropped, so a crashed startup cannot present as idle.
             let msg
-            try { msg = JSON.parse(trimmed) } catch { continue }
+            try { msg = JSON.parse(trimmed) } catch {
+              bot.status = 'failed: ' + trimmed.slice(0, 300)
+              console.log('[feishu] helper raw output: ' + trimmed.slice(0, 500))
+              continue
+            }
             handleHelperMessage(bot, msg)
+          }
+        }
+        // A helper that died without ever reaching onReady must not leave the
+        // settings page showing 'connecting' forever: the subprocess handle is
+        // settled ('completed'/'killed'), so report the failure state.
+        if (bot.proc.status !== 'running' && bot.proc.status !== 'pending') {
+          if (bot.status !== 'connected' && bot.status !== 'connecting') {
+            /* keep the richer status text set above */
+          } else {
+            bot.status = 'stopped:' + bot.proc.status
           }
         }
       } catch (error) {
@@ -629,6 +646,10 @@ export function apply(ctx) {
       return
     }
     if (msg.type === 'error') {
+      // A fatal helper error (missing/broken lark sdk, bad credentials) leaves
+      // the process about to exit, so surface it where the settings page can
+      // show it instead of letting the UI fall back to a silent 'idle'.
+      bot.status = 'failed: ' + String(msg.message)
       console.log('[feishu] helper error: ' + String(msg.message))
       return
     }
