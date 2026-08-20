@@ -400,12 +400,14 @@ export function apply(ctx) {
         // text replies are automatically delivered to Feishu; only use feishu
         // tools for generated media/files the user must see.
         const systemPrompt = agentCtx.get('systemPrompt')
+        console.log('[feishu] setup: systemPrompt service available =', !!systemPrompt)
         if (systemPrompt) {
           agentCtx.effect(() => systemPrompt.section({
             name: 'feishu:tool-usage',
             order: 200,
             text: `You are connected to a Feishu (Lark) chat. Your normal text responses are automatically delivered to the user — just reply normally. DO NOT use feishu_send for ordinary text replies. Only use feishu_send_media to deliver generated images, videos, audio, or files that the user must see. When you send media through feishu_send_media, you may return "NO_REPLY" as your final text to suppress the automatic text delivery.`,
           }))
+          console.log('[feishu] setup: injected feishu:tool-usage system prompt section')
         }
       },
     })
@@ -428,12 +430,14 @@ export function apply(ctx) {
         }
         // Re-inject Feishu tool usage guidance after resume
         const systemPrompt = agentCtx.get('systemPrompt')
+        console.log('[feishu] resume setup: systemPrompt service available =', !!systemPrompt)
         if (systemPrompt) {
           agentCtx.effect(() => systemPrompt.section({
             name: 'feishu:tool-usage',
             order: 200,
             text: `You are connected to a Feishu (Lark) chat. Your normal text responses are automatically delivered to the user — just reply normally. DO NOT use feishu_send for ordinary text replies. Only use feishu_send_media to deliver generated images, videos, audio, or files that the user must see. When you send media through feishu_send_media, you may return "NO_REPLY" as your final text to suppress the automatic text delivery.`,
           }))
+          console.log('[feishu] resume setup: injected feishu:tool-usage system prompt section')
         }
       },
     })
@@ -547,19 +551,31 @@ export function apply(ctx) {
   function collectTurn(events, fromSeq) {
     let reply = ''
     let deliveredByTool = false
+    console.log('[feishu] collectTurn: scanning from seq', fromSeq, 'total events', events.length)
     for (let i = fromSeq; i < events.length; i++) {
       const event = events[i]
-      if (!event || event.type !== 'assistant/message') continue
+      if (!event) continue
+      console.log('[feishu] collectTurn: event', i, 'type =', event.type)
+      if (event.type !== 'assistant/message') continue
       const message = event.data && event.data.message
       const blocks = message && message.content ? message.content : []
+      console.log('[feishu] collectTurn: assistant/message at', i, 'blocks =', blocks.length)
       let text = ''
       for (const block of blocks) {
         if (!block) continue
+        console.log('[feishu] collectTurn: block type =', block.type, block.type === 'tool-call' ? 'name=' + block.name : '')
         if (block.type === 'text' && typeof block.text === 'string') text += block.text
-        if (block.type === 'tool-call' && FEISHU_DELIVERY_TOOLS.has(block.name)) deliveredByTool = true
+        if (block.type === 'tool-call' && FEISHU_DELIVERY_TOOLS.has(block.name)) {
+          console.log('[feishu] collectTurn: DETECTED feishu delivery tool:', block.name)
+          deliveredByTool = true
+        }
       }
-      if (text.trim().length > 0) reply = text
+      if (text.trim().length > 0) {
+        console.log('[feishu] collectTurn: captured text reply, length =', text.length)
+        reply = text
+      }
     }
+    console.log('[feishu] collectTurn: final reply length =', reply.trim().length, 'deliveredByTool =', deliveredByTool)
     return { reply: reply.trim(), deliveredByTool }
   }
 
