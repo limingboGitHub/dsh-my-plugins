@@ -8,14 +8,16 @@
 | --- | --- | --- |
 | [dsh-feishu-connect](packages/dsh-feishu-connect) | `dsh-feishu-connect` | 把飞书（Lark）机器人接入 Agent 会话，长连接收发、每聊天独立会话、设置页管理 |
 | [dsh-token-usage-stats](packages/dsh-token-usage-stats) | `@lmber/dsh-token-usage-stats` | 记录每次模型调用的 token 消耗，设置页内按日/周/月及自定义区间查看 |
+| [dsh-session-completion-notify](packages/dsh-session-completion-notify) | `@lmber/dsh-session-completion-notify` | 会话完成时发出系统通知（未选中、标签页隐藏或窗口失焦时都覆盖） |
 
 ## 安装
 
-两个插件互不依赖，按需安装：
+三个插件互不依赖，按需安装：
 
 ```sh
 dsh plugin --profile web add dsh-feishu-connect
 dsh plugin --profile web add @lmber/dsh-token-usage-stats
+dsh plugin --profile web add @lmber/dsh-session-completion-notify
 ```
 
 装完重启 DSH。卸载把 `add` 换成 `remove`。
@@ -26,11 +28,12 @@ dsh plugin --profile web add @lmber/dsh-token-usage-stats
 
 ```
 packages/
-├── dsh-feishu-connect/     飞书桥接
-└── dsh-token-usage-stats/  token 用量统计
+├── dsh-feishu-connect/              飞书桥接
+├── dsh-token-usage-stats/           token 用量统计
+└── dsh-session-completion-notify/   会话完成系统通知
 ```
 
-这里不使用 workspace 依赖提升或统一构建：两个包都是手写的免构建 ESM 包，各自的 `package.json` 就是完整的发布单元。仓库只承担版本管理与集中存放。
+这里不使用 workspace 依赖提升或统一构建：每个包都是手写的免构建 ESM 包，各自的 `package.json` 就是完整的发布单元。仓库只承担版本管理与集中存放。
 
 ## 发布
 
