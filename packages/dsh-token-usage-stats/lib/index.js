@@ -15,6 +15,9 @@ import { dirname, join } from 'node:path'
 /** Pathname serving the aggregated summary to the browser half. */
 const STATS_ROUTE = '/api/token-usage-stats'
 
+/** Pathname serving hourly/daily/weekly bucketed time series for the charts. */
+const SERIES_ROUTE = '/api/token-usage-stats/series'
+
 /**
  * Token counts in TokenUsage are disjoint (billed input is the sum of
  * uncached input plus both cache buckets), so the total is a plain sum.
@@ -128,6 +131,55 @@ function loadLedger(ledgerPath) {
   return entries
 }
 
+/** Baseline of a local-time 24h day in epoch ms: the local midnight that starts the day containing `ts`. */
+function dayStartMs(ts) {
+  const date = new Date(ts)
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
+/**
+ * Bucket the ledger into a time series under a named granularity. Each bucket
+ * is local-calendar and carries the entry token total (billed tokens across
+ * every bucket, the same figure the summary route reports). The returned
+ * windows are contiguous and unordered; the browser sorts and labels them.
+ * @param entries - every recorded model call.
+ * @param grain - `hour` (per-day 0..23 buckets), `day` (one bucket per local day), or `month`.
+ * @param maxBuckets - cap on returned windows, newest-first; the rest are dropped.
+ * @returns `{ granularity, buckets }` with each bucket `{ key, ts, tokens, calls }`.
+ */
+function timeSeries(entries, granularity, maxBuckets) {
+  const buckets = new Map()
+
+  const startOf = (ts) => {
+    const base = dayStartMs(ts)
+    if (granularity === 'hour') {
+      const hour = new Date(ts).getHours()
+      return base + (hour * 3600 * 1000)
+    }
+    if (granularity === 'month') {
+      const date = new Date(ts)
+      return new Date(date.getFullYear(), date.getMonth(), 1).getTime()
+    }
+    return base
+  }
+
+  for (const entry of entries) {
+    const key = startOf(entry.ts ?? 0)
+    const bucket = buckets.get(key)
+    if (bucket === undefined) {
+      buckets.set(key, { key, ts: key, tokens: entry.totalTokens ?? 0, calls: 1 })
+    } else {
+      bucket.tokens += entry.totalTokens ?? 0
+      bucket.calls += 1
+    }
+  }
+
+  const ordered = [...buckets.values()].sort((a, b) => b.ts - a.ts)
+  const sliced = maxBuckets === undefined ? ordered : ordered.slice(0, maxBuckets)
+  return { granularity, buckets: sliced }
+}
+
 export function apply(ctx, config) {
   const ledgerPath = config?.ledgerPath ?? defaultLedgerPath()
   mkdirSync(dirname(ledgerPath), { recursive: true })
@@ -177,12 +229,13 @@ export function apply(ctx, config) {
 
   // The browser half reads the summary from here.
   ctx.inject(['webServer'], (httpCtx) => {
+    const paramsOf = (req) => new URL(req.url ?? '/', 'http://localhost').searchParams
+
     httpCtx.effect(() => httpCtx.webServer.register({
       kind: 'exact',
       path: STATS_ROUTE,
       handler: (req, res) => {
-        // `req.url` is a path-relative target; the base only satisfies the parser.
-        const params = new URL(req.url ?? '/', 'http://localhost').searchParams
+        const params = paramsOf(req)
         const rangeParam = params.get('range')
         const fromParam = params.get('from')
         const toParam = params.get('to')
@@ -229,5 +282,39 @@ export function apply(ctx, config) {
         res.end(JSON.stringify({ range: label, ...summarize(scoped) }))
       },
     }), 'token-usage-stats: summary route')
+
+    httpCtx.effect(() => httpCtx.webServer.register({
+      kind: 'exact',
+      path: SERIES_ROUTE,
+      handler: (req, res) => {
+        // Median daily bucket width 24h, 20 buckets ≈ 20 days of history; the
+        // month grain slices the always-monotonic ledger to its newest 12
+        // calendar months. Newest-first (ts desc) matches the summary mood.
+        const params = paramsOf(req)
+        const granularityParam = params.get('granularity') ?? 'day'
+        if (granularityParam !== 'hour' && granularityParam !== 'day' && granularityParam !== 'month') {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: `unknown granularity: ${granularityParam}` }))
+          return
+        }
+        const maxBucketsParam = params.get('limit')
+        let maxBuckets = undefined
+        if (maxBucketsParam !== null) {
+          const parsed = Number(maxBucketsParam)
+          if (!Number.isInteger(parsed) || parsed <= 0) {
+            res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify({ error: 'limit must be a positive integer' }))
+            return
+          }
+          maxBuckets = parsed
+        }
+
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        })
+        res.end(JSON.stringify(timeSeries(entries, granularityParam, maxBuckets)))
+      },
+    }), 'token-usage-stats: series route')
   })
 }
