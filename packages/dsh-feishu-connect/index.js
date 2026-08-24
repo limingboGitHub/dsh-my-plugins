@@ -396,10 +396,47 @@ export function apply(ctx) {
 
   // ---- dedicated per-chat sessions (cc-connect style) ----
   const defaultAgentOptions = () => {
-    const selection = ctx.get('agentDefaultModel')
-    const selected = selection && typeof selection.currentSelection === 'function'
-      ? selection.currentSelection() : undefined
-    return selected ? { provider: selected.provider, model: selected.model } : undefined
+    try {
+      const selection = ctx.get('agentDefaultModel')
+      const selected = selection && typeof selection.currentSelection === 'function'
+        ? selection.currentSelection() : undefined
+      return selected ? { provider: selected.provider, model: selected.model } : undefined
+    } catch (error) {
+      console.log('[feishu] agentDefaultModel read failed: ' + String(error && error.message || error))
+      return undefined
+    }
+  }
+
+  // ---- workspace attachment ----
+  // Sessions created/resumed by the bridge must join the configured
+  // workspace's registry membership, or the GUI groups them under 未分组
+  // even though their cwd matches the workspace path. Attachment is a
+  // best-effort, idempotent side effect and never blocks message handling.
+  const workspaceFor = (path) => {
+    try {
+      const registry = ctx.get('workspaceRegistry')
+      if (!registry || typeof registry.list !== 'function') return undefined
+      const target = normalizePath(path || '')
+      if (!target) return undefined
+      return registry.list().find((w) => w && normalizePath(w.path) === target)
+    } catch (error) {
+      console.log('[feishu] workspace list failed: ' + String(error && error.message || error))
+      return undefined
+    }
+  }
+
+  const attachSessionToWorkspace = (bot, sessionId) => {
+    const cfg = bot.cfg
+    if (!cfg.workspace || !sessionId) return Promise.resolve()
+    return Promise.resolve().then(() => {
+      const ws = workspaceFor(cfg.workspace)
+      if (!ws || typeof ws.attachSession !== 'function') return
+      if (Array.isArray(ws.sessionIds) && ws.sessionIds.includes(sessionId)) return
+      return ws.attachSession(sessionId)
+    }).catch((error) => {
+      console.log('[feishu] attach session ' + sessionId + ' to workspace failed: '
+        + String(error && error.message || error))
+    })
   }
 
   async function createDedicated(bot, sessionId, mainAgent) {
@@ -408,7 +445,7 @@ export function apply(ctx) {
     const cfg = bot.cfg
     const preset = mainAgent && mainAgent.session && mainAgent.session.header
       ? mainAgent.session.header.agentPreset : undefined
-    return agents.create({
+    const handle = await agents.create({
       sessionId,
       meta: {
         cwd: (cfg.workspace && String(cfg.workspace).trim()) || workspaceRoot() || undefined,
@@ -433,12 +470,25 @@ export function apply(ctx) {
         }
       },
     })
+    // New sessions join the configured workspace so they show up there
+    // instead of under 未分组.
+    void attachSessionToWorkspace(bot, sessionId)
+    return handle
   }
 
   async function resumeDedicated(bot, sessionId, mainAgent) {
     const agents = ctx.get('agents')
     if (!agents) throw new Error('agents service unavailable')
-    return agents.resume({
+    // A session that is already live (e.g. the GUI opened it, or a previous
+    // delivery resumed it) must be reused, not resumed: agents.resume rejects
+    // with "cannot prepare session ... while it is live", which would otherwise
+    // cascade into creating a brand-new session and losing the conversation.
+    const live = typeof agents.get === 'function' ? agents.get(sessionId) : undefined
+    if (live) {
+      void attachSessionToWorkspace(bot, sessionId)
+      return { agent: live, dispose: () => Promise.resolve() }
+    }
+    const handle = await agents.resume({
       resumeSessionId: sessionId,
       ...defaultAgentOptions() ? { agentOptions: defaultAgentOptions() } : {},
       setup: async (agentCtx) => {
@@ -455,6 +505,9 @@ export function apply(ctx) {
         }
       },
     })
+    // Keep the session visible in its configured workspace across restarts.
+    void attachSessionToWorkspace(bot, sessionId)
+    return handle
   }
 
   function chatSessionId(chatId, n) {
@@ -675,10 +728,20 @@ export function apply(ctx) {
         const sessionId = 'feishu-main-' + Date.now().toString(36)
         const handle = await createDedicated(bot, sessionId, undefined)
         agent = handle.agent
-        // make the auto-created session the chat's main session so later
-        // messages keep landing in it
-        chat.sessions = [{ id: sessionId, label: '主会话', type: 'dedicated', handle }]
-        chat.activeIndex = 0
+        // Make the auto-created session the chat's current session WITHOUT
+        // discarding the previously persisted sessions: a failed/absent
+        // resume must never wipe the chat's session list, or /switch can no
+        // longer reach older conversations after a restart. The legacy 'main'
+        // placeholder (which cannot be resumed) is replaced in place; any
+        // other entries stay in the list.
+        const mainIdx = chat.sessions.findIndex((s) => s.type === 'main')
+        if (mainIdx >= 0) {
+          chat.sessions[mainIdx] = { id: sessionId, label: '主会话', type: 'dedicated', handle }
+          chat.activeIndex = mainIdx
+        } else {
+          chat.sessions.push({ id: sessionId, label: '主会话', type: 'dedicated', handle })
+          chat.activeIndex = chat.sessions.length - 1
+        }
         await bot.persistChat(chatId, chat)
       } catch (error) {
         console.log('[feishu] auto-create agent failed: ' + String(error && error.stack || error))
@@ -928,6 +991,10 @@ export function apply(ctx) {
           for (const s of record.sessions) {
             if (s && s.type === 'dedicated' && typeof s.id === 'string') {
               chat.sessions.push({ id: s.id, label: typeof s.label === 'string' && s.label ? s.label : '会话', type: 'dedicated' })
+              // Heal workspace membership for sessions restored from a
+              // previous run (older versions never attached them), so they
+              // surface under the configured workspace, not 未分组.
+              void attachSessionToWorkspace(this, s.id)
             } else {
               chat.sessions.push({ id: 'main', label: '主会话', type: 'main' })
             }
@@ -990,7 +1057,7 @@ export function apply(ctx) {
           entry.handle = handle
           return handle.agent
         } catch (error) {
-          console.log('[feishu] resume failed for ' + entry.id + ': ' + String(error && error.message || error))
+          console.log('[feishu] resume failed for ' + entry.id + ': ' + String(error && error.stack || error))
           return undefined
         }
       },
