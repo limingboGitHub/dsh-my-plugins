@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.7.0] - 2025-01-XX
+
+修复「同一聊天后续消息的回复失败」：订阅器在每条消息后注销，只存活于当前 turn。
+
+### Fixed
+- **同一聊天后续消息的回复失败**：1.6.0 的订阅器在 `handleFeishuMessage` 成功处理后注销
+  （`finally { offEvent() }`），导致同一 dedicated session 里后续消息没有 observer，回复
+  无法投递到飞书。现在改为 per-bot 常驻 observer（`ensureChatDelivery`），通过
+  `bot.chats` 映射 session -> chatId，持续为所有使用该 bot 的聊天服务。
+- **处理中表情时序与投递解耦**：表情只在 `agent.whenIdle()` 完成后撤销，不再依赖
+  「segment 投递完成」这一逻辑，避免表情卡住或提前消失。
+
+### Changed
+- 移除 `handleFeishuMessage` 里的 per-message `ctx.on('session/event')` 与
+  `chain` / `delivered` 计数，统一由 per-bot observer 按段投递。
+
 ## [1.6.0] - 2025-01-XX
 
 实时交错投递：每段文字产生时立即发送，而非等 turn 结束。

@@ -583,6 +583,52 @@ export function apply(ctx) {
     return sentHere.includes(trimmed) ? '' : trimmed
   }
 
+  // Register a per-bot observer that delivers agent replies back to all
+  // Feishu chats that use this bot. Unlike a per-message observer, this
+  // stays alive across messages so later replies to the same dedicated
+  // session are still delivered.
+  function ensureChatDelivery(bot) {
+    if (bot.deliveryRegistered) return
+    bot.deliveryRegistered = true
+    // chatId per session: the dedicated sessions are per-chat, but the
+    // observer is per-bot, so we need to map session -> chatId.
+    // We use the chat's `sessions` array to find which chatId owns a given
+    // session handle.
+    bot.delivered = new WeakMap() // session -> Set of delivered text segments
+    bot.deliveryCounter = 0
+    ctx.on('session/event', (session, event) => {
+      if (event.type !== 'assistant/message') return
+      // find which chatId (for this bot) owns this session
+      let chatId
+      for (const [id, chat] of bot.chats) {
+        if (chat.sessions.some((s) => s.handle && s.handle.agent && s.handle.agent.session === session)) {
+          chatId = id
+          break
+        }
+      }
+      if (!chatId) return
+      const text = deliverableText(event.data && event.data.message, chatId)
+      if (text.length === 0) return
+      // track delivered segments per session to avoid duplicates within a turn
+      if (!bot.delivered.has(session)) bot.delivered.set(session, new Set())
+      const seen = bot.delivered.get(session)
+      if (seen.has(text)) return
+      seen.add(text)
+      bot.deliveryCounter++
+      const index = bot.deliveryCounter
+      // deliver the segment in order through the bot's chain
+      bot.chain = bot.chain.then(async () => {
+        try {
+          const res = await sendFeishuText(bot, chatId, text)
+          console.log('[feishu] segment ' + String(index) + ' to ' + chatId + ': status=' + String(res.status))
+          if (res.status !== 200 && res.text) console.log('[feishu] send response: ' + res.text.slice(0, 500))
+        } catch (error) {
+          console.log('[feishu] segment ' + String(index) + ' failed: ' + String(error && error.message || error))
+        }
+      })
+    })
+  }
+
   async function handleFeishuMessage(bot, evt) {
     const cfg = bot.cfg
     const messageId = evt.message_id
@@ -612,6 +658,10 @@ export function apply(ctx) {
       await handleCommand(bot, chatId, text)
       return
     }
+
+    // Register the delivery observer for this bot (if not already done).
+    // This must happen before resolving the agent so the observer is in place.
+    ensureChatDelivery(bot)
 
     // Feishu messages always go to a dedicated session owned by this chat —
     // never to a GUI session (pickAgent matches the configured workspace's
@@ -650,62 +700,18 @@ export function apply(ctx) {
       content: [{ type: 'text', text: text + marker }],
       source: { kind: 'user' },
     }
-    // Deliver each text segment as the agent produces it, not after the turn.
-    //
-    // The loop appends `assistant/message` and only then runs that step's tool
-    // calls, so a media send lands between two text segments. Collecting text
-    // until the turn ends put every attachment ahead of all narration (the
-    // observed "image, video, then all three replies in one bubble").
-    //
-    // Sends are chained through one promise so segments keep their order even
-    // though the observer itself cannot await.
-    let chain = Promise.resolve()
-    let delivered = 0
-    const deliverSegment = (text) => {
-      delivered++
-      const index = delivered
-      chain = chain.then(async () => {
-        try {
-          const res = await sendFeishuText(bot, chatId, text)
-          console.log('[feishu] segment ' + String(index) + ' to ' + chatId
-            + ' (msg ' + messageId + '): status=' + String(res.status))
-          if (res.status !== 200 && res.text) console.log('[feishu] send response: ' + res.text.slice(0, 500))
-        } catch (error) {
-          console.log('[feishu] segment ' + String(index) + ' failed for ' + messageId
-            + ': ' + String(error && error.message || error))
-        }
-      })
-    }
-
-    // Registered BEFORE send: the reaction call below awaits, and the first
-    // assistant/message can land during that await. Only live events reach an
-    // observer, so no seq filtering is needed.
-    const offEvent = ctx.on('session/event', (session, event) => {
-      if (session !== agent.session) return
-      if (event.type !== 'assistant/message') return
-      const text = deliverableText(event.data && event.data.message, chatId)
-      if (text.length > 0) deliverSegment(text)
-    })
-
     agent.send(message, 'next-turn', true)
     console.log('[feishu] delivered ' + messageId + ' to agent ' + agent.id + ' (workspace ' + (agent.session.header && agent.session.header.cwd || '?') + ')')
 
-    // typing reaction: added when the message arrives; removed only AFTER the
-    // reply is delivered to the chat (cc-connect EventResult-then-stop order),
-    // or when the turn fails.
+    // typing reaction: added when the message arrives; removed after the agent
+    // turn completes (idle), or when the turn fails. Delivery to the chat is
+    // handled by the per-bot observer in ensureChatDelivery, independent of
+    // this reaction lifecycle.
     const emoji = (cfg.reactionEmoji && String(cfg.reactionEmoji).trim()) || 'OnIt'
     const typingEnabled = emoji && emoji !== '' && emoji !== 'none'
       && typeof cfg.appId === 'string' && cfg.appId.length > 0
       && typeof cfg.appSecret === 'string' && cfg.appSecret.length > 0
     let reactionId = undefined
-    let reactionRemoved = false
-    const removeReactionOnce = () => {
-      if (reactionRemoved || !reactionId) return
-      reactionRemoved = true
-      void removeReaction(bot, cfg.appId, cfg.appSecret, messageId, reactionId).catch((error) => {
-        console.log('[feishu] reaction remove failed: ' + String(error && error.message || error))
-      })
-    }
     if (typingEnabled) {
       try {
         const r = await addReaction(bot, cfg.appId, cfg.appSecret, messageId, emoji)
@@ -720,14 +726,13 @@ export function apply(ctx) {
       await agent.whenIdle()
     } catch (error) {
       console.log('[feishu] turn wait failed for ' + messageId + ': ' + String(error && error.message || error))
-    } finally {
-      offEvent()
     }
 
-    // Let the queued sends finish before dropping the typing reaction.
-    await chain
-    if (delivered === 0) console.log('[feishu] nothing to deliver for ' + messageId)
-    removeReactionOnce()
+    if (reactionId) {
+      void removeReaction(bot, cfg.appId, cfg.appSecret, messageId, reactionId).catch((error) => {
+        console.log('[feishu] reaction remove failed: ' + String(error && error.message || error))
+      })
+    }
   }
 
   function normalizeEvent(data) {
