@@ -9,7 +9,7 @@
 | [dsh-feishu-connect](packages/dsh-feishu-connect) | `dsh-feishu-connect` | 把飞书（Lark）机器人接入 Agent 会话，长连接收发、每聊天独立会话、设置页管理 |
 | [dsh-token-usage-stats](packages/dsh-token-usage-stats) | `@lmber/dsh-token-usage-stats` | 记录每次模型调用的 token 消耗，设置页内按日/周/月及自定义区间查看 |
 | [dsh-session-completion-notify](packages/dsh-session-completion-notify) | `@lmber/dsh-session-completion-notify` | 会话完成时发出系统通知（未选中、标签页隐藏或窗口失焦时都覆盖） |
-| [dsh-voice-input](packages/dsh-voice-input) | `dsh-voice-input` | 输入框麦克风按钮，浏览器录音、host 侧走小米 MiMo ASR 转成文字填进草稿 |
+| [dsh-voice-input](packages/dsh-voice-input) | `@lmber/dsh-voice-input` | 输入框麦克风按钮，浏览器录音、host 侧走小米 MiMo ASR 转成文字填进草稿 |
 
 ## 安装
 
@@ -19,7 +19,7 @@
 dsh plugin --profile web add dsh-feishu-connect
 dsh plugin --profile web add @lmber/dsh-token-usage-stats
 dsh plugin --profile web add @lmber/dsh-session-completion-notify
-dsh plugin --profile web add dsh-voice-input
+dsh plugin --profile web add @lmber/dsh-voice-input
 ```
 
 装完重启 DSH。卸载把 `add` 换成 `remove`。
