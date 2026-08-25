@@ -1,0 +1,15 @@
+# dsh-voice-input bundle patch: applied automatically when this package is
+# listed in a profile's dsh.profile.bundles (or the row is copied into the
+# profile's cordis.patch.yml). One row drives both halves: the loader imports
+# the package main (host plugin: the MiMo provider plus the transcription
+# endpoint) and client-modules serves ./client.js (the composer microphone).
+#
+# The three config fields below are the deployment-varying values. Override any
+# of them to point at a different endpoint, model, or credential name.
+- insert:
+    - id: voice-input
+      name: dsh-voice-input
+      config:
+        baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1'
+        model: 'mimo-v2.5-asr'
+        apiKeyEnv: MIMO_API_KEY
