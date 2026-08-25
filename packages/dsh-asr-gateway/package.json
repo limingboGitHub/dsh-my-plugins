@@ -1,0 +1,46 @@
+{
+    "peerDependencies":  {
+                             "@deepseek-ai/dsh-invariants":  "^0.1.0",
+                             "@deepseek-ai/dsh-typert-remote-service":  "^0.1.0",
+                             "@deepseek-ai/cordis":  "^4.0.1",
+                             "@deepseek-ai/dsh-asr":  "^1.0.0"
+                         },
+    "version":  "1.0.0",
+    "license":  "MIT",
+    "repository":  {
+                       "url":  "git+https://github.com/limingboGitHub/dsh-my-plugins.git",
+                       "directory":  "packages/dsh-asr-gateway",
+                       "type":  "git"
+                   },
+    "files":  [
+                  "lib/",
+                  "README*.md"
+              ],
+    "types":  "lib/types/index.d.ts",
+    "name":  "@deepseek-ai/dsh-asr-gateway",
+    "type":  "module",
+    "exports":  {
+                    "./invariant":  {
+                                        "types":  "./lib/types/invariant.d.ts",
+                                        "default":  "./lib/invariant.js"
+                                    },
+                    "./package.json":  "./package.json",
+                    ".":  {
+                              "types":  "./lib/types/index.d.ts",
+                              "default":  "./lib/index.js"
+                          }
+                },
+    "description":  "ASR Remote gateway: browser-to-host transcription bridge",
+    "publishConfig":  {
+                          "access":  "public"
+                      },
+    "keywords":  [
+                     "dsh",
+                     "deepseek-harness",
+                     "asr",
+                     "gateway",
+                     "remote",
+                     "cordis"
+                 ],
+    "main":  "lib/index.js"
+}

@@ -1,0 +1,43 @@
+{
+    "peerDependencies":  {
+                             "@deepseek-ai/cordis":  "^4.0.1",
+                             "@deepseek-ai/dsh-invariants":  "^0.1.0"
+                         },
+    "version":  "1.0.0",
+    "license":  "MIT",
+    "repository":  {
+                       "url":  "git+https://github.com/limingboGitHub/dsh-my-plugins.git",
+                       "directory":  "packages/dsh-asr",
+                       "type":  "git"
+                   },
+    "files":  [
+                  "lib/",
+                  "README*.md"
+              ],
+    "types":  "lib/types/index.d.ts",
+    "name":  "@deepseek-ai/dsh-asr",
+    "type":  "module",
+    "exports":  {
+                    "./invariant":  {
+                                        "types":  "./lib/types/invariant.d.ts",
+                                        "default":  "./lib/invariant.js"
+                                    },
+                    "./package.json":  "./package.json",
+                    ".":  {
+                              "types":  "./lib/types/index.d.ts",
+                              "default":  "./lib/index.js"
+                          }
+                },
+    "description":  "ASR (Automatic Speech Recognition) capability Service Definition: abstract provider interface for speech-to-text transcription",
+    "publishConfig":  {
+                          "access":  "public"
+                      },
+    "keywords":  [
+                     "dsh",
+                     "deepseek-harness",
+                     "asr",
+                     "speech-recognition",
+                     "cordis"
+                 ],
+    "main":  "lib/index.js"
+}
