@@ -1,9 +1,9 @@
 {
     "peerDependencies":  {
-                             "@deepseek-ai/dsh-invariants":  "^0.1.0",
-                             "@deepseek-ai/dsh-typert-remote-service":  "^0.1.0",
+                             "@deepseek-ai/dsh-invariants":  "^0.0.1-rc.1",
+                             "@deepseek-ai/dsh-typert-remote-service":  "^0.0.1-rc.1",
                              "@deepseek-ai/cordis":  "^4.0.1",
-                             "@deepseek-ai/dsh-asr":  "^1.0.0"
+                             "dsh-asr":  "^1.0.0"
                          },
     "version":  "1.0.0",
     "license":  "MIT",
@@ -17,7 +17,7 @@
                   "README*.md"
               ],
     "types":  "lib/types/index.d.ts",
-    "name":  "@deepseek-ai/dsh-asr-gateway",
+    "name":  "dsh-asr-gateway",
     "type":  "module",
     "exports":  {
                     "./invariant":  {
@@ -38,8 +38,7 @@
                      "dsh",
                      "deepseek-harness",
                      "asr",
-                     "gateway",
-                     "remote",
+                     "speech-recognition",
                      "cordis"
                  ],
     "main":  "lib/index.js"

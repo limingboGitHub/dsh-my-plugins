@@ -1,10 +1,10 @@
 {
     "peerDependencies":  {
-                             "@deepseek-ai/dsh-invariants":  "^0.1.0",
+                             "@deepseek-ai/dsh-invariants":  "^0.0.1-rc.1",
                              "react":  "^18.3.0",
-                             "@deepseek-ai/dsh-client-ui-conversation":  "^0.1.0",
+                             "@deepseek-ai/dsh-client-ui-conversation":  "^0.0.1-rc.1",
                              "@deepseek-ai/cordis":  "^4.0.1",
-                             "@deepseek-ai/dsh-client-runtime":  "^0.1.0"
+                             "@deepseek-ai/dsh-client-runtime":  "^0.0.1-rc.1"
                          },
     "version":  "1.0.0",
     "license":  "MIT",
@@ -18,12 +18,12 @@
                   "README*.md"
               ],
     "types":  "lib/types/index.d.ts",
-    "name":  "@deepseek-ai/dsh-client-ui-voice-input",
+    "name":  "dsh-client-ui-voice-input",
     "type":  "module",
     "exports":  {
-                    "./client":  {
-                                     "default":  "./lib/client.js"
-                                 },
+                    "/client":  {
+                                    "default":  "./lib/client.js"
+                                },
                     "./invariant":  {
                                         "types":  "./lib/types/invariant.d.ts",
                                         "default":  "./lib/invariant.js"
@@ -41,10 +41,8 @@
     "keywords":  [
                      "dsh",
                      "deepseek-harness",
-                     "voice-input",
                      "asr",
-                     "microphone",
-                     "react",
+                     "speech-recognition",
                      "cordis"
                  ],
     "dsh":  {

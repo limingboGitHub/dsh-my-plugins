@@ -1,0 +1,69 @@
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-icon-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--dsw-fill-hover);
+  color: var(--dsw-icon-primary);
+}
+
+.button:disabled {
+  color: var(--dsw-icon-disabled);
+  cursor: not-allowed;
+}
+
+/* Recording is the one state that must read at a glance from across the
+   composer, so it takes the business accent rather than an icon swap alone. */
+.recording,
+.recording:hover:not(:disabled) {
+  color: var(--dsw-text-danger);
+}
+
+.recording::after {
+  content: '';
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--dsw-radius-sm);
+  background: currentColor;
+  opacity: 0.12;
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.08; }
+  50% { opacity: 0.2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording::after {
+    animation: none;
+  }
+}
+
+.error {
+  overflow: hidden;
+  max-width: 180px;
+  color: var(--dsw-text-danger);
+  font-size: var(--dsw-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

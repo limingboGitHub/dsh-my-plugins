@@ -1,9 +1,9 @@
 {
     "peerDependencies":  {
-                             "@deepseek-ai/dsh-invariants":  "^0.1.0",
-                             "@deepseek-ai/dsh-credentials":  "^0.1.0",
+                             "@deepseek-ai/dsh-invariants":  "^0.0.1-rc.1",
+                             "@deepseek-ai/dsh-credentials":  "^0.0.1-rc.1",
                              "@deepseek-ai/cordis":  "^4.0.1",
-                             "@deepseek-ai/dsh-asr":  "^1.0.0"
+                             "dsh-asr":  "^1.0.0"
                          },
     "version":  "1.0.0",
     "license":  "MIT",
@@ -17,7 +17,7 @@
                   "README*.md"
               ],
     "types":  "lib/types/index.d.ts",
-    "name":  "@deepseek-ai/dsh-asr-mimo",
+    "name":  "dsh-asr-mimo",
     "type":  "module",
     "exports":  {
                     "./invariant":  {
@@ -39,8 +39,6 @@
                      "deepseek-harness",
                      "asr",
                      "speech-recognition",
-                     "xiaomi",
-                     "mimo",
                      "cordis"
                  ],
     "main":  "lib/index.js"

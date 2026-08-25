@@ -1,7 +1,7 @@
 {
     "peerDependencies":  {
                              "@deepseek-ai/cordis":  "^4.0.1",
-                             "@deepseek-ai/dsh-invariants":  "^0.1.0"
+                             "@deepseek-ai/dsh-invariants":  "^0.0.1-rc.1"
                          },
     "version":  "1.0.0",
     "license":  "MIT",
@@ -15,7 +15,7 @@
                   "README*.md"
               ],
     "types":  "lib/types/index.d.ts",
-    "name":  "@deepseek-ai/dsh-asr",
+    "name":  "dsh-asr",
     "type":  "module",
     "exports":  {
                     "./invariant":  {
