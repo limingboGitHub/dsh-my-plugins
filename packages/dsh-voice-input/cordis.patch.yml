@@ -8,7 +8,7 @@
 # of them to point at a different endpoint, model, or credential name.
 - insert:
     - id: voice-input
-      name: dsh-voice-input
+      name: '@lmber/dsh-voice-input'
       config:
         baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1'
         model: 'mimo-v2.5-asr'

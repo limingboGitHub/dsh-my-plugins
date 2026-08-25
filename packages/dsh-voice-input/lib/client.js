@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-	id: "dsh-voice-input",
+	id: "@lmber/dsh-voice-input",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -228,19 +228,19 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region \0voice-css:D:\PythonProjects\deepseek-harness\dsh-my-plugins\packages\dsh-voice-input\src\client\VoiceInputControl.module.css.mjs
 		const css = ".yq1w2W_wrap{align-items:center;gap:6px;min-width:0;display:inline-flex}.yq1w2W_button{border-radius:var(--dsw-radius-sm);width:24px;height:24px;color:var(--dsw-icon-secondary);cursor:pointer;background:0 0;border:none;justify-content:center;align-items:center;padding:0;transition:background-color .15s,color .15s;display:inline-flex}.yq1w2W_button:hover:not(:disabled){background:var(--dsw-fill-hover);color:var(--dsw-icon-primary)}.yq1w2W_button:disabled{color:var(--dsw-icon-disabled);cursor:not-allowed}.yq1w2W_recording,.yq1w2W_recording:hover:not(:disabled){color:var(--dsw-text-danger)}.yq1w2W_recording:after{content:\"\";border-radius:var(--dsw-radius-sm);opacity:.12;background:currentColor;width:24px;height:24px;animation:1.6s ease-in-out infinite yq1w2W_breathe;position:absolute}@keyframes yq1w2W_breathe{0%,to{opacity:.08}50%{opacity:.2}}@media (prefers-reduced-motion:reduce){.yq1w2W_recording:after{animation:none}}.yq1w2W_error{max-width:180px;color:var(--dsw-text-danger);font-size:var(--dsw-font-size-xs);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}";
-		const tagId = "dsh-voice-input/style";
+		const tagId = "@lmber/dsh-voice-input/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
-			tag.dataset.plugin = "dsh-voice-input";
+			tag.dataset.plugin = "@lmber/dsh-voice-input";
 			tag.dataset.pluginCss = tagId;
 			tag.textContent = css;
 			document.head.appendChild(tag);
 		}
 		var VoiceInputControl_module_css_default = {
-			"breathe": "yq1w2W_breathe",
-			"button": "yq1w2W_button",
-			"wrap": "yq1w2W_wrap",
 			"recording": "yq1w2W_recording",
+			"wrap": "yq1w2W_wrap",
+			"button": "yq1w2W_button",
+			"breathe": "yq1w2W_breathe",
 			"error": "yq1w2W_error"
 		};
 		//#endregion

@@ -22,7 +22,7 @@ import { transform } from 'lightningcss'
  */
 
 /** Package name; the id the module loader keys this bundle by. */
-const ID = 'dsh-voice-input'
+const ID = '@lmber/dsh-voice-input'
 
 /**
  * Specifiers the page already loaded, which must stay `require` calls.

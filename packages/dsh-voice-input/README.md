@@ -1,4 +1,4 @@
-# dsh-voice-input
+# @lmber/dsh-voice-input
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供语音输入的第三方插件：在输入框旁加一个麦克风按钮，说完自动转成文字填进草稿。识别走小米 MiMo ASR。
 
@@ -17,7 +17,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add dsh-voice-input
+dsh plugin --profile web add @lmber/dsh-voice-input
 ```
 
 然后设置 API key 并重启 DSH：
@@ -37,7 +37,7 @@ export MIMO_API_KEY=your-key
 ## 卸载
 
 ```sh
-dsh plugin --profile web remove dsh-voice-input
+dsh plugin --profile web remove @lmber/dsh-voice-input
 ```
 
 ## 配置
