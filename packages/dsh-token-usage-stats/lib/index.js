@@ -79,9 +79,9 @@ function summarize(entries) {
 
 /**
  * Inclusive lower timestamp bound for a named range, computed from local
- * calendar boundaries (a person reading "今日" means their own midnight, not
+ * calendar boundaries (a person reading "today" means their own midnight, not
  * a rolling 24 hours). `all` has no bound.
- * @param range - one of `day`, `week`, `month`, `all`.
+ * @param range - one of `day`, `yesterday`, `day-before`, `week`, `month`, `all`.
  * @param now - the reference instant, in epoch milliseconds.
  * @returns the epoch-millisecond lower bound, or undefined for `all`.
  */
@@ -90,6 +90,15 @@ function rangeStart(range, now) {
   const date = new Date(now)
   date.setHours(0, 0, 0, 0)
   if (range === 'day') return date.getTime()
+  if (range === 'yesterday') {
+    date.setDate(date.getDate() - 1)
+    return date.getTime()
+  }
+  // Closeable "the day before yesterday" — local midnight two days back.
+  if (range === 'day-before') {
+    date.setDate(date.getDate() - 2)
+    return date.getTime()
+  }
   if (range === 'week') {
     // ISO weeks start Monday; getDay() is 0 for Sunday.
     const weekday = (date.getDay() + 6) % 7
@@ -103,8 +112,26 @@ function rangeStart(range, now) {
   return undefined
 }
 
+/**
+ * Last instant of the local day containing a bound computed by rangeStart.
+ * Since every rangeStart result is a local midnight, this is its close.
+ * @param ms - a local-midnight epoch millisecond.
+ * @returns the instant 23:59:59.999 of that same local day.
+ */
+function dayEndMs(ms) {
+  const d = new Date(ms)
+  d.setDate(d.getDate() + 1)
+  return d.getTime() - 1
+}
+
 /** The range names the HTTP route accepts. */
-const RANGES = new Set(['day', 'week', 'month', 'all'])
+const RANGES = new Set(['day', 'yesterday', 'day-before', 'week', 'month', 'all'])
+
+/**
+ * Day-length named ranges have an inclusive window of that single local day;
+ * week/month/all span from their start to now.
+ */
+const DAY_RANGES = new Set(['day', 'yesterday', 'day-before'])
 
 /**
  * The ledger's default location: the DSH home directory, so the file follows
@@ -260,7 +287,9 @@ export function apply(ctx, config) {
             return
           }
           from = rangeStart(rangeParam, Date.now())
-          to = undefined
+          // A single-day range ends at that day's local close; week/month/all
+          // run from their start through now.
+          to = DAY_RANGES.has(rangeParam) ? dayEndMs(from) : undefined
           label = rangeParam
         } else {
           // Default to all

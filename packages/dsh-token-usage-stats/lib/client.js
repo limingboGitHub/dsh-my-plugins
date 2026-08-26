@@ -65,6 +65,8 @@ window.__ModuleLoader__.load({
 		/** Named summary ranges shown as segmented buttons. */
 		const RANGES = [
 			{ id: "day", label: "今日" },
+			{ id: "yesterday", label: "昨天" },
+			{ id: "day-before", label: "前天" },
 			{ id: "week", label: "本周" },
 			{ id: "month", label: "本月" },
 			{ id: "all", label: "全部" }
@@ -303,6 +305,84 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/** Local 00:00:00 of the day containing `ts`, in epoch ms. */
+		function dayStartMs(ts) {
+			const d = new Date(ts);
+			d.setHours(0, 0, 0, 0);
+			return d.getTime();
+		}
+
+		/** One SVG month-grid calendar heatmap colored by daily token intensity.
+		 * The window is the newest 30 buckets; cells not present in the window
+		 * (recent days with no activity) fall back to an "empty" color.
+		 * @param buckets - newest-first `day` buckets from the series endpoint.
+		 */
+		function Heatmap(buckets) {
+			// Anchor the 30-cell grid on the most recent local day regardless of
+			// whether a bucket was recorded for it (sparse ledger until today).
+			const byDay = new Map();
+			for (const b of buckets ?? []) byDay.set(dayStartMs(b.ts), b.tokens ?? 0);
+			const today = new Date();
+			today.setHours(0, 0, 0, 0);
+			const cells = [];
+			for (let ago = 29; ago >= 0; ago--) {
+				const d = new Date(today.getTime() - ago * 86400000);
+				d.setHours(0, 0, 0, 0);
+				cells.push({ ts: d.getTime(), tokens: byDay.get(d.getTime()) ?? 0 });
+			}
+			const maxV = Math.max(...cells.map(c => c.tokens), 1);
+
+			// 7 rows (weekdays top-to-bottom, Monday first) x 5 columns renders 30 days.
+			const COLS = 5, ROWS = 7, CELL = 18, GAP = 3, PAD = 6;
+			const dayLabel = (ts) => { const d = new Date(ts); return `${d.getMonth() + 1}/${d.getDate()}`; };
+			const parts = [];
+			const order = [6, 0, 1, 2, 3, 4, 5]; // weekday -> row, Monday first
+			for (let i = 0; i < 30; i++) {
+				const cell = cells[i];
+				const col = Math.floor(i / ROWS);
+				const row = order[new Date(cell.ts).getDay()];
+				const x = PAD + col * (CELL + GAP);
+				const y = PAD + row * (CELL + GAP);
+				const frac = cell.tokens > 0 ? Math.sqrt(cell.tokens / maxV) : 0;
+				// A dark-to-visible ramping through the deepseek accent makes empty
+				// cells read as background while busy cells step up in intensity.
+				const alpha = cell.tokens > 0 ? 0.25 + 0.75 * frac : 0;
+				const fill = cell.tokens > 0
+					? `rgba(90, 120, 255, ${alpha.toFixed(2)})`
+					: "var(--dsw-alias-bg-layer-3)";
+				parts.push(h("g", { key: i },
+					h("rect", {
+						x: String(x), y: String(y),
+						width: String(CELL), height: String(CELL),
+						rx: "4",
+						fill,
+						stroke: "var(--dsw-alias-border-l1)"
+					}),
+					h("title", null, `${dayLabel(cell.ts)}：${cell.tokens === 0 ? "无记录" : compact(cell.tokens) + " tokens"}`)
+				));
+			}
+			// Weekday header labels down the left column.
+			const dayNames = ["一", "二", "三", "四", "五", "六", "日"];
+			const labels = dayNames.map((name, i) => {
+				const my = PAD + order[i] * (CELL + GAP) + CELL / 2;
+				return h("text", { key: "l" + i, x: String(PAD + 4), y: String(my + 4), fontSize: "9", fill: "var(--dsw-alias-label-tertiary)", textAnchor: "middle" }, name);
+			});
+			const WCH = PAD + ROWS * (CELL + GAP) + PAD;
+			const WCM = PAD + COLS * (CELL + GAP) + PAD;
+			return h("div", null,
+				h("svg", { viewBox: `0 0 ${WCM} ${WCH}`, style: { width: "100%", height: "auto", maxHeight: "120px", display: "block" } },
+					...labels, ...parts),
+				h("div", { style: { display: "flex", alignItems: "center", gap: "6px", marginTop: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary)" } },
+					h("span", null, "低"),
+					h("span", { style: { width: "12px", height: "12px", borderRadius: "3px", background: "var(--dsw-alias-bg-layer-3)" } }),
+					h("span", { style: { fontSize: "16px", lineHeight: "12px", color: "var(--dsw-static-blue-500, rgb(59,130,246))" } }, "▲"),
+					h("span", null, "高"),
+					h("span", { style: { marginLeft: "auto", opacity: 0.7 } }, "近 30 天每日使用量")
+				)
+			);
+		}
+
+		// Weekday header labels; factored so the grid width stays correct.
 		function TokenUsageSettingsPage() {
 			const [summary, setSummary] = R.useState(null);
 			const [loading, setLoading] = R.useState(true);
@@ -314,6 +394,8 @@ window.__ModuleLoader__.load({
 			const [granularity, setGranularity] = R.useState("day");
 			// Series buckets for the bar chart (or null while loading / on error).
 			const [series, setSeries] = R.useState(null);
+			// Daily buckets for the last-30-days heatmap (or null while loading).
+			const [heatFile, setHeatFile] = R.useState(null);
 
 			const load = R.useCallback(async (which, from, to) => {
 				setLoading(true);
@@ -353,6 +435,19 @@ window.__ModuleLoader__.load({
 				}
 			}, []);
 
+			// Fetch daily buckets for the last-30-days heatmap (30 always fits the
+			// newest-window cap and matches the heatmap's fixed window).
+			const loadHeatmap = R.useCallback(async () => {
+				try {
+					const url = SERIES_ENDPOINT + "?granularity=day&limit=30";
+					const response = await fetch(url, { headers: { accept: "application/json" } });
+					if (!response.ok) throw new Error("读取热力图失败：HTTP " + response.status);
+					setHeatFile(await response.json());
+				} catch (err) {
+					setHeatFile(null);
+				}
+			}, []);
+
 			// Fetch on open and whenever the named range changes.
 			R.useEffect(() => {
 				if (range !== "custom") void load(range);
@@ -362,6 +457,11 @@ window.__ModuleLoader__.load({
 			R.useEffect(() => {
 				void loadSeries(granularity);
 			}, [loadSeries, granularity]);
+
+			// Fetch the heatmap once on open.
+			R.useEffect(() => {
+				void loadHeatmap();
+			}, [loadHeatmap]);
 
 			const button = (key, label, active, onClick) => h("button", {
 				key,
@@ -409,10 +509,7 @@ window.__ModuleLoader__.load({
 							item.id === range,
 							() => { setRange(item.id); }
 						)),
-						button("custom", "自定义", range === "custom", () => { setRange("custom"); }),
-						button("refresh", loading ? "刷新中…" : "刷新", false, () => {
-							void load(range, customFrom, customTo);
-						})
+						button("custom", "自定义", range === "custom", () => { setRange("custom"); })
 					)
 				),
 				// Custom date picker row; only visible when range === "custom"
@@ -500,6 +597,14 @@ window.__ModuleLoader__.load({
 				// top 10 models plus an "其他模型" aggregate for the remainder.
 				const pie = renderPie(summary.byModel ?? [], 10);
 
+				// Only render the bar chart once the loaded series matches the
+				// selected granularity. While the new grain's fetch is in flight
+				// series still holds the previous grain's buckets; without this
+				// gate the stale bars (e.g. 12 day-bars while switching to 按月)
+				// would render first and then visibly swap to the month bars.
+				const chartReady = series !== null && series.granularity === granularity
+					&& (granularity === "day" ? summary !== null : true);
+
 				const chartPanel = (title, desc) => h("div", {
 					style: {
 						border: "1px solid var(--dsw-alias-border-l2)",
@@ -519,9 +624,9 @@ window.__ModuleLoader__.load({
 						)
 					),
 					h("div", { style: { fontSize: "12px", opacity: 0.7, marginBottom: "8px" } }, desc),
-					summary === null || (series === null && granularity === "day")
-						? h("div", { style: { padding: "18px", opacity: 0.6 } }, "正在加载图表…")
-						: BarChart(series?.buckets ?? [], formatBucket)
+					chartReady
+						? BarChart(series.buckets, formatBucket)
+						: h("div", { style: { padding: "18px", opacity: 0.6 } }, "正在加载图表…")
 				);
 
 				body = h("div", { style: { minWidth: 0 } },
@@ -545,6 +650,20 @@ window.__ModuleLoader__.load({
 					chartPanel("Token 消耗趋势", granularity === "day"
 						? "最近 14 天每日消耗；悬停查看精确数值。"
 						: "最近 14 个月每月消耗；悬停查看精确数值。"),
+					h("div", {
+						style: {
+							border: "1px solid var(--dsw-alias-border-l2)",
+							borderRadius: "12px",
+							padding: "14px 16px",
+							marginBottom: "16px"
+						}
+					},
+						h("h3", { style: { margin: "0 0 10px", fontSize: "14px" } }, "近 30 天使用热度"),
+						h("div", { style: { fontSize: "12px", opacity: 0.7, marginBottom: "8px" } }, "按天着色，颜色越深表示当天 token 消耗越多；悬停查看精确数值。"),
+						heatFile === null
+							? h("div", { style: { padding: "18px", opacity: 0.6 } }, "正在加载热力图…")
+							: Heatmap(heatFile?.buckets ?? [])
+					),
 					h("div", {
 						style: {
 							border: "1px solid var(--dsw-alias-border-l2)",

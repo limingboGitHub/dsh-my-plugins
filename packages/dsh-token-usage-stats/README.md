@@ -8,12 +8,13 @@
 
 - 每次模型调用自动追加一条记录到 JSONL 账本
 - 设置页内独立的「Token 使用统计」面板
-- 按今日 / 本周 / 本月 / 全部筛选，也支持自定义日期范围
+- 按今日 / 昨天 / 前天 / 本周 / 本月 / 全部筛选，也支持自定义日期范围
 - SVG 柱状图展示消耗趋势：按天 / 按月切换；悬停柱子弹出精确数值
+- 近 30 天按天着色的使用热度热力图，颜色越深表示当天消耗越多
 - MVP 饼图展示模型用量占比 Top 10 + 其余模型合并，颜色取自主题调色板
 - 大数字自动换算单位（`k / M / B / T`），卡片、表格、图例、悬停提示统一缩写
 - 每行提供商 / 模型统计表带彩色色块，卡片与表格均随 DSH 明暗主题换色
-- 进入面板时拉取一次，需要更新时手动点「刷新」
+- 进入面板与切换筛选时自动拉取最新数据，无需手动刷新
 
 ## 安装
 
@@ -80,11 +81,11 @@ wc -l < ~/.dsh/token-usage-ledger.jsonl
 主机端注册了一个只读路由，浏览器界面通过它取数据，也可以自己调用：
 
 ```
-GET /api/token-usage-stats?range=day|week|month|all
+GET /api/token-usage-stats?range=day|yesterday|day-before|week|month|all
 GET /api/token-usage-stats?from=YYYY-MM-DD&to=YYYY-MM-DD
 ```
 
-`from`/`to` 按本地时区解析，含首尾两天，两者都可省略。返回聚合后的 JSON，非法参数返回 400。
+`from`/`to` 按本地时区解析，含首尾两天，两者都可省略。`day` / `yesterday` / `day-before` 各覆盖对应那一个本地日；`week` / `month` / `all` 从各自起点到当前时刻。非法参数返回 400。
 
 柱状图的数据来自分桶时间序列接口：
 
@@ -99,6 +100,8 @@ GET /api/token-usage-stats/series?granularity=day|hour|month&limit=N
 
 该路由绑定在 DSH web 服务器上，跟随其监听地址（默认仅本机 `127.0.0.1`）。它没有独立鉴权，与 DSH web 界面本身共享同一信任范围 —— 如果把 DSH 暴露到非本机地址，这份用量数据同样会被暴露。
 
+热力图直接复用 `series` 接口的按天分桶（`limit=30` 返回最近 30 天桶），在最右侧按周一开头的星期网格上按 token 总量着色。
+
 ## 兼容性
 
 依赖 DSH 的 `session/event` 事件流、`webServer` 服务和 `settings.section` 插槽。DSH 尚未正式发版，这些接口仍可能变动；插件在这些接口变更后可能需要同步更新。
@@ -109,7 +112,7 @@ GET /api/token-usage-stats/series?granularity=day|hour|month&limit=N
 
 - 统计基于插件安装后产生的记录，装之前的历史调用无法追溯。
 - 账本只追加不轮转，长期使用会持续增长，需要时自行归档。
-- 面板不自动刷新，需手动点「刷新」。
+- 面板在进入或切换筛选时自动拉取数据（连接打开期间不轮询，需要最新数字可重新进入面板）。
 - 账本目前约 7 天历史：按月粒度只会得到 1 根柱子；按周列表则显示最近 14 天逐日柱子，周内无跨周合并。
 
 ## License
