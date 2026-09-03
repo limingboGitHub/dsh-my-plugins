@@ -1,16 +1,17 @@
 {
   "name": "@lmber/dsh-session-completion-notify",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DSH Web client plugin: one OS-level notification when a session finishes while you are not watching it (not selected, tab hidden, or window unfocused)",
   "type": "module",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./client": "./src/client/index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "src/**",
+    "client.js",
     "README.md",
     "README.zh.md",
     "LICENSE"
@@ -18,17 +19,19 @@
   "publishConfig": {
     "access": "public"
   },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
-  },
   "dsh": {
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-runtime"
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-locale"
       ],
       "platform": "web"
     }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.1.2-alpha.5",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.2-alpha.5"
   },
   "keywords": [
     "dsh",
