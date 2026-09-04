@@ -90,6 +90,7 @@ function summarize(entries) {
   let outputTokens = 0
   let cacheReadTokens = 0
   let cacheWriteTokens = 0
+  let reasoningTokens = 0
   let durationSum = 0
   let durationCount = 0
   let firstTokenSum = 0
@@ -103,6 +104,7 @@ function summarize(entries) {
     outputTokens += entry.outputTokens ?? 0
     cacheReadTokens += entry.cacheReadTokens ?? 0
     cacheWriteTokens += entry.cacheWriteTokens ?? 0
+    reasoningTokens += entry.reasoningTokens ?? 0
     if (typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs)) {
       durationSum += entry.durationMs
       durationCount += 1
@@ -168,6 +170,7 @@ function summarize(entries) {
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
+    reasoningTokens,
     avgDurationMs: avg(durationSum, durationCount),
     avgFirstTokenMs: avg(firstTokenSum, firstTokenCount),
     avgOutputTokensPerSec: avg(speedSum, speedCount),

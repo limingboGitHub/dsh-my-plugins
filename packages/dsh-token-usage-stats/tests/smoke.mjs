@@ -118,6 +118,8 @@ console.log('\n-- summarize timing averages --')
     check('avgDurationMs matches', summary.avgDurationMs === expectedAvg, `got ${summary.avgDurationMs}, expected ${expectedAvg}`)
   }
   check('byProvider/byModel present', Array.isArray(summary.byProvider) && Array.isArray(summary.byModel))
+  check('reasoningTokens aggregated as non-negative number', typeof summary.reasoningTokens === 'number' && summary.reasoningTokens >= 0, `got ${summary.reasoningTokens}`)
+  check('non-reasoning output never exceeds output', summary.outputTokens - summary.reasoningTokens <= summary.outputTokens)
   check('speed average present when data has speed', summary.avgOutputTokensPerSec === undefined || typeof summary.avgOutputTokensPerSec === 'number')
   check('byModel rows carry timing averages', summary.byModel.every(row => 'avgOutputTokensPerSec' in row && 'avgFirstTokenMs' in row && 'avgDurationMs' in row), JSON.stringify(summary.byModel))
   check('byModel timing averages are numbers or undefined', summary.byModel.every(row => [row.avgOutputTokensPerSec, row.avgFirstTokenMs, row.avgDurationMs].every(v => v === undefined || (typeof v === 'number' && v >= 0))), JSON.stringify(summary.byModel))
