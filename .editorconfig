@@ -1,0 +1,17 @@
+# EditorConfig: 保持本仓库的 UTF-8 无 BOM 编码基线。
+# BOM 曾导致 DSH client-modules 静默跳过插件的浏览器半（见根 README「发布前必读」）。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
