@@ -78,6 +78,7 @@ key 每次识别时重新读取，换了 key 不必重启。
 ## 限制
 
 - **只支持 Web profile。** 依赖浏览器的 `MediaRecorder` 和 `AudioContext`，Electron 与 headless 模式下不加载。
+- **要求 DSH ≥ 0.1.2-rc.1。** 1.1.0 起改用新版 client 标准包（`useInput`/`inputActions` hooks）与 `@deepseek-ai/dsh-session/types`，不再依赖已移除的 `dsh-client-runtime` 包；更早版本请用 1.0.x。
 - **音频上限 10 MB（base64 后）。** MiMo 的限制；按 16 kHz 单声道估算约 4 分钟。浏览器和 host 两侧都会检查。
 - **没有实时转写。** 录完整段才发一次请求，说话过程中不出字。
 - **纯静音也算「没录到」。** 解码后长度为 0 与解码失败合并为同一提示，因为对使用者来说都是没有可发送的音频。

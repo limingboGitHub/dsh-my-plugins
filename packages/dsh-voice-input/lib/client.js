@@ -226,8 +226,8 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
-		//#region \0voice-css:D:\PythonProjects\deepseek-harness\dsh-my-plugins\packages\dsh-voice-input\src\client\VoiceInputControl.module.css.mjs
-		const css = ".yq1w2W_wrap{align-items:center;gap:6px;min-width:0;display:inline-flex}.yq1w2W_button{border-radius:var(--dsw-radius-sm);width:24px;height:24px;color:var(--dsw-icon-secondary);cursor:pointer;background:0 0;border:none;justify-content:center;align-items:center;padding:0;transition:background-color .15s,color .15s;display:inline-flex}.yq1w2W_button:hover:not(:disabled){background:var(--dsw-fill-hover);color:var(--dsw-icon-primary)}.yq1w2W_button:disabled{color:var(--dsw-icon-disabled);cursor:not-allowed}.yq1w2W_recording,.yq1w2W_recording:hover:not(:disabled){color:var(--dsw-text-danger)}.yq1w2W_recording:after{content:\"\";border-radius:var(--dsw-radius-sm);opacity:.12;background:currentColor;width:24px;height:24px;animation:1.6s ease-in-out infinite yq1w2W_breathe;position:absolute}@keyframes yq1w2W_breathe{0%,to{opacity:.08}50%{opacity:.2}}@media (prefers-reduced-motion:reduce){.yq1w2W_recording:after{animation:none}}.yq1w2W_error{max-width:180px;color:var(--dsw-text-danger);font-size:var(--dsw-font-size-xs);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}";
+		//#region \0voice-css:D:\PythonProjects\dsh-my-plugins\packages\dsh-voice-input\src\client\VoiceInputControl.module.css.mjs
+		const css = ".uPq-Mq_wrap{align-items:center;gap:6px;min-width:0;display:inline-flex}.uPq-Mq_button{border-radius:var(--dsw-radius-sm);width:24px;height:24px;color:var(--dsw-icon-secondary);cursor:pointer;background:0 0;border:none;justify-content:center;align-items:center;padding:0;transition:background-color .15s,color .15s;display:inline-flex}.uPq-Mq_button:hover:not(:disabled){background:var(--dsw-fill-hover);color:var(--dsw-icon-primary)}.uPq-Mq_button:disabled{color:var(--dsw-icon-disabled);cursor:not-allowed}.uPq-Mq_recording,.uPq-Mq_recording:hover:not(:disabled){color:var(--dsw-text-danger)}.uPq-Mq_recording:after{content:\"\";border-radius:var(--dsw-radius-sm);opacity:.12;background:currentColor;width:24px;height:24px;animation:1.6s ease-in-out infinite uPq-Mq_breathe;position:absolute}@keyframes uPq-Mq_breathe{0%,to{opacity:.08}50%{opacity:.2}}@media (prefers-reduced-motion:reduce){.uPq-Mq_recording:after{animation:none}}.uPq-Mq_error{max-width:180px;color:var(--dsw-text-danger);font-size:var(--dsw-font-size-xs);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}";
 		const tagId = "@lmber/dsh-voice-input/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
@@ -237,11 +237,11 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var VoiceInputControl_module_css_default = {
-			"recording": "yq1w2W_recording",
-			"wrap": "yq1w2W_wrap",
-			"button": "yq1w2W_button",
-			"breathe": "yq1w2W_breathe",
-			"error": "yq1w2W_error"
+			"recording": "uPq-Mq_recording",
+			"button": "uPq-Mq_button",
+			"error": "uPq-Mq_error",
+			"breathe": "uPq-Mq_breathe",
+			"wrap": "uPq-Mq_wrap"
 		};
 		//#endregion
 		//#region src/client/VoiceInputControl.tsx
@@ -258,14 +258,16 @@ window.__ModuleLoader__.load({
 		const MAX_AUDIO_BASE64_LENGTH$1 = 10485760;
 		/**
 		* Microphone control for the composer tool row. Recording and WAV encoding
-		* happen here; the transcription request and the draft write are injected, so
+		* happen here; the transcription request and the draft write are injected, and
+		* the composer submit state arrives through the session standard hooks, so
 		* this component holds no ctx and no session lookup.
 		*/
-		function VoiceInputControl({ input, transcribe, appendDraft, t }) {
+		function VoiceInputControl({ useInput, transcribe, appendDraft, t }) {
 			const [phase, setPhase] = (0, react.useState)("idle");
 			const [error, setError] = (0, react.useState)(null);
 			const recordingRef = (0, react.useRef)(null);
 			const aliveRef = (0, react.useRef)(true);
+			const input = useInput((s) => s);
 			(0, react.useEffect)(() => {
 				aliveRef.current = true;
 				return () => {
@@ -478,14 +480,17 @@ window.__ModuleLoader__.load({
 		//#region src/client/index.ts
 		/** Dictionary namespace owned by this plugin. */
 		const NS = "voice";
-		/** Required services: the composer seat's slot registry, locale, and sessions. */
+		/** Required services: the slot registry, locale, and the session scope resolver. */
 		const inject = [
 			"slots",
 			"locale",
 			"sessions"
 		];
 		/**
-		* Client plugin body: register the microphone control over the ASR Remote.
+		* Client plugin body: register the microphone control over the composer
+		* input tool row. Session-scoped draft writes resolve live through the
+		* conversation service facade, so a transcription landing after a session
+		* switch still reaches its own session's composer.
 		* @param ctx - client root context.
 		*/
 		function apply(ctx) {

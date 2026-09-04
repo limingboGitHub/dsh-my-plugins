@@ -29,15 +29,20 @@ const ID = '@lmber/dsh-voice-input'
  *
  * Bundling any of these would either duplicate a runtime that carries shared
  * identity (React hooks, the Cordis service store) or inline a module the
- * loader is the only supplier of.
+ * loader is the only supplier of. This mirrors the web shell's baseline
+ * module table (PLATFORM_MODULES) plus the type-only /client merges this
+ * package imports; everything else is value-imported and must inline.
  */
 const SHELL_PROVIDED = [
   'react',
   'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
   '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-runtime/client',
-  '@deepseek-ai/dsh-client-ui-conversation/client',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-primitives',
   '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-conversation/client',
   '@deepseek-ai/dsh-client-locale/client',
 ]
 

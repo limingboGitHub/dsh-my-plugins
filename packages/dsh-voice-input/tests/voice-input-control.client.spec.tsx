@@ -22,8 +22,8 @@ beforeEach(() => { vi.restoreAllMocks() })
 const t: VoiceInputControlProps['t'] = makeTranslate(zh)
 
 // Derived from the props share: ui-conversation owns InputState and does not
-// export it, so the seat's own runtime share is the authority here.
-type InputState = VoiceInputControlProps['input']
+// export it, so the seat's own useInput hook is the authority here.
+type InputState = Parameters<Parameters<VoiceInputControlProps['useInput']>[0]>[0]
 
 /**
  * A composer state in the given submit phase. Every field is supplied so the
@@ -39,13 +39,6 @@ function inputState(phase: InputState['phase']): InputState {
 const plainInput = inputState('plain')
 
 /**
- * The seat's other owner prop. The control reads nothing from it, so the spec
- * asserts nothing about it either; a full ConversationSnapshot double would
- * state twenty facts this component cannot observe.
- */
-const session = {} as VoiceInputControlProps['session']
-
-/**
  * Full component props for one composer state.
  * @param input - the composer state under test.
  * @param face - the injected transcribe/appendDraft pair.
@@ -53,16 +46,16 @@ const session = {} as VoiceInputControlProps['session']
  */
 function voiceProps(input: InputState, face: VoiceInputInjected): VoiceInputControlProps {
   return {
-    session,
-    input,
-    // The framework session kit: the control reads none of these members, so
-    // the spec supplies typed stubs and asserts nothing about them.
+    // The framework session kit: the control reads only useInput, so the
+    // spec supplies typed stubs for the rest and asserts nothing about them.
     sessionId: 'voice-test' as VoiceInputControlProps['sessionId'],
-    useSession: (() => session) as unknown as VoiceInputControlProps['useSession'],
+    useSession: (() => undefined) as unknown as VoiceInputControlProps['useSession'],
     useProjection: (() => undefined) as unknown as VoiceInputControlProps['useProjection'],
-    useInput: (() => input) as unknown as VoiceInputControlProps['useInput'],
+    useConversation: (() => undefined) as unknown as VoiceInputControlProps['useConversation'],
+    useInput: selector => selector(input),
     inputActions: {} as VoiceInputControlProps['inputActions'],
     useSessions: (() => undefined) as unknown as VoiceInputControlProps['useSessions'],
+    useSessionPendingInteraction: (() => undefined) as unknown as VoiceInputControlProps['useSessionPendingInteraction'],
     useWorkspaces: (() => undefined) as unknown as VoiceInputControlProps['useWorkspaces'],
     ...face,
     t,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the ui-conversation SlotMap merge (the input tool-row seats
-// and their InputZone owner share).
+// and their session standard hooks).
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { VoiceInputInjected } from './contract.ts'
 import { startRecording, type ActiveRecording, type RecorderFailure } from './recorder.ts'
@@ -29,14 +29,18 @@ const MAX_AUDIO_BASE64_LENGTH = 10 * 1024 * 1024
 
 /**
  * Microphone control for the composer tool row. Recording and WAV encoding
- * happen here; the transcription request and the draft write are injected, so
+ * happen here; the transcription request and the draft write are injected, and
+ * the composer submit state arrives through the session standard hooks, so
  * this component holds no ctx and no session lookup.
  */
-export function VoiceInputControl({ input, transcribe, appendDraft, t }: VoiceInputControlProps) {
+export function VoiceInputControl({ useInput, transcribe, appendDraft, t }: VoiceInputControlProps) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
   const recordingRef = useRef<ActiveRecording | null>(null)
   const aliveRef = useRef(true)
+  // The composer's own submit plane: while it is adjudicating or submitting,
+  // the draft belongs to that transaction.
+  const input = useInput(s => s)
 
   useEffect(() => {
     aliveRef.current = true
