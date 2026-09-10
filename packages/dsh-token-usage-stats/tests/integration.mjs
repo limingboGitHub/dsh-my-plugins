@@ -121,25 +121,61 @@ async function main() {
   check('row 2 has no timing fields without stream', second.durationMs === 5_000 && second.firstTokenMs === undefined && second.outputTokensPerSec === undefined, JSON.stringify({ d: second.durationMs, f: second.firstTokenMs, s: second.outputTokensPerSec }))
   check('row 2 cache read bucketed', second.cacheReadTokens === 5 && second.totalTokens === 65)
 
+  // Current (format v2+) flow: step/start opens the step, request/header logs
+  // the route once, assistant/message embeds its exact timed stream, and the
+  // tool-loop dispatch that follows tool/result re-anchors without a new header.
+  emitCall(ctx, { type: 'step/start', seq: 6, time: 40_000, data: { turn: 3, step: 1 } })
+  emitCall(ctx, { type: 'request/header', seq: 7, time: 41_000, data: { header: { config: { provider: 'p1', model: 'm3' } } } })
+  emitCall(ctx, { type: 'assistant/message', seq: 8, time: 46_000, data: {
+    turn: 3,
+    step: 1,
+    usage: { inputTokens: 30, outputTokens: 40 },
+    stream: [{ type: 'text-chunks', time0: 42_000, index: 0, dt: [500], texts: ['a', 'bc'] }],
+  } })
+  emitCall(ctx, { type: 'tool/result', seq: 9, time: 47_000, data: { turn: 3, step: 1, message: { role: 'tool', content: [], source: { kind: 'tool', callId: 'call-1' } } } })
+  emitCall(ctx, { type: 'assistant/message', seq: 10, time: 49_000, data: {
+    turn: 3,
+    step: 1,
+    usage: { inputTokens: 5, outputTokens: 20 },
+    stream: [
+      { type: 'reasoning-chunks', time0: 47_500, index: 0, dt: [], texts: ['think'] },
+      { type: 'text-chunks', time0: 48_000, index: 1, dt: [500], texts: [' yes', ' though'] },
+    ],
+  } })
+
+  const refreshed = readFileSync(ledgerPath, 'utf-8').trim().split('\n').map(line => JSON.parse(line))
+  const third = refreshed[2]
+  check('row 3 ts from message event', third.ts === 46_000)
+  check('row 3 duration anchored at request/header', third.durationMs === 5_000, `got ${third.durationMs}`)
+  check('row 3 firstTokenMs from embedded stream', third.firstTokenMs === 1_000, `got ${third.firstTokenMs}`)
+  check('row 3 speed from usage over stream time', Math.abs(third.outputTokensPerSec - 10) < 0.1, `got ${third.outputTokensPerSec}`)
+  check('row 3 route from request/header', third.provider === 'p1' && third.model === 'm3')
+
+  const fourth = refreshed[3]
+  check('row 4 (tool-loop dispatch) duration re-anchored at tool/result', fourth.durationMs === 2_000, `got ${fourth.durationMs}`)
+  check('row 4 firstTokenMs from reasoning stream', fourth.firstTokenMs === 500, `got ${fourth.firstTokenMs}`)
+  check('row 4 speed from reasoning-aware stream total', Math.abs(fourth.outputTokensPerSec - 13.3) < 0.15, `got ${fourth.outputTokensPerSec}`)
+  check('row 4 keeps the step route without a new header', fourth.provider === 'p1' && fourth.model === 'm3')
+
   const webServer = ctx.get('webServer')
   const summaryAll = await callRoute(webServer, '/api/token-usage-stats', '?range=all')
   check('summary route 200', summaryAll.status === 200)
-  check('summary totals', summaryAll.json.totalCalls === 2 && summaryAll.json.totalTokens === (150 + 65), JSON.stringify(summaryAll.json))
+  check('summary totals', summaryAll.json.totalCalls === 4 && summaryAll.json.totalTokens === 310, JSON.stringify(summaryAll.json))
   check('summary includes device id', Array.isArray(summaryAll.json.deviceIds) && summaryAll.json.deviceIds.length === 1)
 
   const summaryAugust = await callRoute(webServer, '/api/token-usage-stats', '?range=1970-01')
-  check('YYYY-MM range filters to month', summaryAugust.json.totalCalls === 2 && summaryAugust.json.totalTokens === 215, `calls=${summaryAugust.json.totalCalls}`)
+  check('YYYY-MM range filters to month', summaryAugust.json.totalCalls === 4 && summaryAugust.json.totalTokens === 310, `calls=${summaryAugust.json.totalCalls}`)
 
   const series = await callRoute(webServer, '/api/token-usage-stats/series', '?granularity=day&limit=30')
   check('series 30 contiguous buckets', series.json.buckets.length === 30, `got ${series.json.buckets.length}`)
 
   const byModel = await callRoute(webServer, '/api/token-usage-stats/series-by-model', '?granularity=day&limit=14')
-  check('series-by-model has both models', byModel.json.series.length === 2, JSON.stringify(byModel.json.series?.map(s => s.model)))
+  check('series-by-model has all three models', byModel.json.series.length === 3, JSON.stringify(byModel.json.series?.map(s => s.model)))
   check('series-by-model zero-filled window', byModel.json.series.every(s => s.buckets.length === 14))
 
   const meta = await callRoute(webServer, '/api/token-usage-stats/meta', '')
   check('meta reports local sync disabled', meta.json.sync.enabled === false, JSON.stringify(meta.json.sync))
-  check('meta entryCount matches ledger', meta.json.entryCount === 2)
+  check('meta entryCount matches ledger', meta.json.entryCount === 4)
 
   const configBefore = await callRoute(webServer, '/api/token-usage-stats/config', '')
   check('config GET shows remote unset', configBefore.json.remoteUrlSet === false && configBefore.json.remoteTokenSet === false, JSON.stringify(configBefore.json))

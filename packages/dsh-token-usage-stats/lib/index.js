@@ -11,10 +11,16 @@
  * carries the device that reported it (`deviceId`), the exact event timestamp
  * (`ts` from the durable event, not `Date.now()`), and timing facts derived
  * from the same event stream (`durationMs`, `firstTokenMs`,
- * `outputTokensPerSec`). When `remoteUrl` is configured, unsynced records are
- * pushed incrementally to that service and the read routes can proxy the
- * remote aggregate (`source=remote`), so several devices share one total while
- * each device keeps its own isolated rows on the server.
+ * `outputTokensPerSec`). Since v0.4.3 the first-token time comes from the
+ * token-bearing records of the `assistant/message`'s embedded stream (session
+ * format v2 dropped the per-chunk `assistant/chunk` event) and the per-call
+ * start anchor from `step/start`/`request/header`, advanced past
+ * `tool/result`/`assistant/attempt` so tool-loop dispatches keep timing; the
+ * pre-v2 chunk flow stays supported for older hosts. When `remoteUrl` is
+ * configured, unsynced records are pushed incrementally to that service and
+ * the read routes can proxy the remote aggregate (`source=remote`), so several
+ * devices share one total while each device keeps its own isolated rows on the
+ * server.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -505,20 +511,92 @@ function buildEntry(session, config, route, timing, usage) {
   return entry
 }
 
-/** Compute timing facts for one completed call from its step timeline. */
-function stepTiming(step) {
-  if (step === undefined || typeof step.headerTime !== 'number') return undefined
-  const messageTime = step.messageTime
-  const durationMs = messageTime - step.headerTime
-  const firstTokenMs = typeof step.firstChunkTime === 'number'
-    ? step.firstChunkTime - step.headerTime
-    : undefined
-  let outputTokensPerSec
-  if (typeof firstTokenMs === 'number' && firstTokenMs >= 0 && step.outputTokens > 0) {
-    const streamMs = messageTime - step.firstChunkTime
-    if (streamMs > 0) outputTokensPerSec = (step.outputTokens / streamMs) * 1000
+/** Time of the first model token in one embedded assistant stream (session
+ * format v2+). Packed delta runs carry `time0` plus cumulative `dt` and the
+ * deltas themselves; raw `chunk` records pair an absolute `time` with a
+ * `StreamChunk`. Mirroring the harness's own first-token rule, a fragment
+ * counts when non-empty (text/reasoning) or when it is a naming/argument-carrying
+ * tool-call fragment; block, usage, and finish chunks never count.
+ * @param stream - the `stream` array of an `assistant/message`/`assistant/attempt` event.
+ * @returns the first token's stream time, or undefined when the stream has none.
+ */
+function firstTokenTimeOf(stream) {
+  if (!Array.isArray(stream)) return undefined
+  for (const record of stream) {
+    if (record === null || typeof record !== 'object') continue
+    if (record.type === 'text-chunks' || record.type === 'reasoning-chunks') {
+      if (typeof record.time0 !== 'number' || !Array.isArray(record.texts)) continue
+      let time = record.time0
+      for (let index = 0; index < record.texts.length; index += 1) {
+        if (index > 0 && typeof record.dt?.[index - 1] === 'number') time += record.dt[index - 1]
+        if (record.texts[index] !== '') return time
+      }
+      continue
+    }
+    if (record.type === 'tool-call-chunks') {
+      if (typeof record.time0 !== 'number' || !Array.isArray(record.args)) continue
+      // A name-bearing tool call qualifies at its first fragment.
+      if (record.name !== undefined) return record.time0
+      let time = record.time0
+      for (let index = 0; index < record.args.length; index += 1) {
+        if (index > 0 && typeof record.dt?.[index - 1] === 'number') time += record.dt[index - 1]
+        if (record.args[index] !== '') return time
+      }
+      continue
+    }
+    if (record.type === 'chunk' && typeof record.time === 'number') {
+      const chunk = record.chunk
+      const chunkType = chunk?.type
+      if (chunkType === 'text-delta' || chunkType === 'reasoning-delta') {
+        if (chunk.text !== '') return record.time
+      } else if (chunkType === 'tool-call-delta') {
+        if (chunk.argumentsDelta !== '' || chunk.name !== undefined) return record.time
+      }
+    }
   }
-  return { messageTime, durationMs, firstTokenMs, outputTokensPerSec }
+  return undefined
+}
+
+/** Compute timing facts for one completed call from its start anchor and stream.
+ * @param startTime - the call's start: the `step/start`/`request/header` time
+ * (advanced past `tool/result` and `assistant/attempt` in tool loops).
+ * @param messageTime - the `assistant/message` event time (call completion).
+ * @param firstTokenTime - the first token's stream time, or undefined.
+ * @param outputTokens - the call's output-token count.
+ * @returns the timing facts, or undefined when there is no usable start anchor.
+ */
+function buildTiming(startTime, messageTime, firstTokenTime, outputTokens) {
+  if (typeof startTime !== 'number' || !Number.isFinite(startTime)
+    || typeof messageTime !== 'number' || !Number.isFinite(messageTime)) {
+    return undefined
+  }
+  const timing = { messageTime }
+  const durationMs = messageTime - startTime
+  if (durationMs >= 0) timing.durationMs = durationMs
+  if (typeof firstTokenTime === 'number' && Number.isFinite(firstTokenTime)
+    && firstTokenTime >= startTime) {
+    timing.firstTokenMs = firstTokenTime - startTime
+  }
+  if (typeof firstTokenTime === 'number' && Number.isFinite(firstTokenTime)
+    && typeof outputTokens === 'number' && outputTokens > 0) {
+    const streamMs = messageTime - firstTokenTime
+    if (streamMs > 0) timing.outputTokensPerSec = (outputTokens / streamMs) * 1000
+  }
+  return timing
+}
+
+/** Route fallback from the assembled assistant message: it carries the
+ * producing provider/model even when no `request/header` was seen for the call.
+ * @param message - the `assistant/message` event's assembled message.
+ * @returns its provider/model pair, or undefined when the source is absent.
+ */
+function messageSourceRoute(message) {
+  const source = message?.source
+  if (source !== null && typeof source === 'object'
+    && typeof source.provider === 'string' && typeof source.model === 'string') {
+    return { provider: source.provider, model: source.model }
+  }
+  return undefined
 }
 
 export function apply(ctx, config = {}) {
@@ -613,34 +691,58 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => stopSyncTimer)
   startSyncTimer()
 
-  // Latest logged call config and step timeline per session. `assistant/message`
-  // carries usage but not the route that produced it; `request/header` carries
-  // the route and its exact event time. A WeakMap keeps no session alive and
-  // needs no explicit cleanup.
+  // Per-session call timeline. The per-call start is anchored at the most
+  // recent `step/start`/`request/header` and advances past `tool/result` and
+  // `assistant/attempt`, so tool-loop dispatches inside one step each get a
+  // start close to their dispatch; first-token time comes from the token
+  // records of the `assistant/message`'s embedded stream (format v2+), with
+  // the pre-v2 `assistant/chunk` flow kept for older hosts. A WeakMap keeps no
+  // session alive and needs no explicit cleanup.
   const timelineBySession = new WeakMap()
 
   ctx.on('session/event', (session, event) => {
     let timeline = timelineBySession.get(session)
     if (timeline === undefined) {
-      timeline = { route: undefined, step: undefined }
+      timeline = { route: undefined, stepKey: undefined, startTime: undefined, firstChunkTime: undefined, outputTokens: 0 }
       timelineBySession.set(session, timeline)
     }
 
+    if (event.type === 'step/start') {
+      const data = event.data ?? {}
+      timeline.stepKey = `${data.turn}:${data.step}`
+      // The step opens its first model call; a request/header refines the start.
+      timeline.startTime = event.time
+      timeline.firstChunkTime = undefined
+      timeline.outputTokens = 0
+      return
+    }
     if (event.type === 'request/header') {
       const callConfig = event.data.header?.config
       if (callConfig !== undefined) {
         timeline.route = { provider: callConfig.provider, model: callConfig.model }
-        timeline.step = { headerTime: event.time, firstChunkTime: undefined, messageTime: undefined, outputTokens: 0 }
+        // Logged inside its step before dispatch: the call's true start.
+        timeline.startTime = event.time
+        timeline.firstChunkTime = undefined
+        timeline.outputTokens = 0
       }
       return
     }
     if (event.type === 'assistant/chunk') {
-      const step = timeline.step
-      if (step === undefined) return
-      if (step.firstChunkTime === undefined) step.firstChunkTime = event.time
+      // Pre-v2 hosts only: chunk events carried the first-token time and usage
+      // count; format v2 embeds the same facts in the assistant/message stream.
+      if (timeline.firstChunkTime === undefined) timeline.firstChunkTime = event.time
       const chunk = event.data.chunk
       if (chunk?.type === 'usage' && typeof chunk.usage?.outputTokens === 'number') {
-        step.outputTokens = chunk.usage.outputTokens
+        timeline.outputTokens = chunk.usage.outputTokens
+      }
+      return
+    }
+    if (event.type === 'assistant/attempt' || event.type === 'tool/result') {
+      // A failed/cancelled attempt or a finished tool closes the in-flight
+      // dispatch; the next dispatch of the step starts after it.
+      const data = event.data ?? {}
+      if (timeline.stepKey === `${data.turn}:${data.step}`) {
+        timeline.startTime = event.time
       }
       return
     }
@@ -648,10 +750,10 @@ export function apply(ctx, config = {}) {
     const usage = event.data.usage
     if (usage === undefined) return
 
-    const step = timeline.step
-    if (step !== undefined) step.messageTime = event.time
-    const timing = stepTiming(step)
-    const entry = buildEntry(session, effectiveConfig, timeline.route, timing, usage)
+    const firstTokenTime = firstTokenTimeOf(event.data.stream) ?? timeline.firstChunkTime
+    const timing = buildTiming(timeline.startTime, event.time, firstTokenTime, usage.outputTokens ?? timeline.outputTokens)
+    const route = timeline.route ?? messageSourceRoute(event.data.message)
+    const entry = buildEntry(session, effectiveConfig, route, timing, usage)
 
     entries.push(entry)
     try {
@@ -659,8 +761,9 @@ export function apply(ctx, config = {}) {
     } catch (error) {
       ctx.logger?.warn?.(error)
     }
-    // The step is complete; the next request/header opens a fresh timeline.
-    timeline.step = undefined
+    // The dispatch is complete; the next one starts after it (tools advance
+    // the anchor further).
+    timeline.startTime = event.time
   })
 
   // The browser half reads the summary from here.

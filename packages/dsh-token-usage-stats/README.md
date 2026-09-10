@@ -70,7 +70,7 @@ dsh plugin --profile web remove @lmber/dsh-token-usage-stats
 ```
 
 - `totalTokens` 是计费 token 总量：`inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`，四项互不重叠，其中 `inputTokens` 只含未命中缓存的输入；`reasoningTokens` 已包含在 `outputTokens` 内，不重复计入。
-- `ts` 取**会话事件自身的 `time` 字段**（精确到每次调用的完成时刻），并在同一步内由 `request/header` → 首个 `assistant/chunk` → `assistant/message` 的时间差推导 `durationMs`（请求发出到完成）与 `firstTokenMs`（首字延迟）、`outputTokensPerSec`（输出速度）。
+- `ts` 取**会话事件自身的 `time` 字段**（精确到每次调用的完成时刻）。计时指标自 v0.4.3 起按当前 DSH 会话格式推导：每次调用的起点锚定在最近的 `step/start` / `request/header`（工具循环中会被 `tool/result` / `assistant/attempt` 推进），首字时间取自 `assistant/message` 内嵌流（format v2+，`text-chunks` / `reasoning-chunks` / `tool-call-chunks` 的首个 token 记录）与 `assistant/message` 完成时间的差值，分别得到 `durationMs`（请求发出到完成）与 `firstTokenMs`（首字延迟）、`outputTokensPerSec`（输出速度）。旧版本 DSH 的 `assistant/chunk` 事件流仍受支持。
 - v0.2.0 及更早的记录没有 `v` 与速度/设备字段，读取时自动兼容；速度类指标只在有新字段的记录上统计。
 
 账本是纯 JSONL，可以直接用其他工具分析：
@@ -176,7 +176,7 @@ node tests/integration.mjs    # cordis 集成测试：真实运行时内验证�
 node server/index.js          # 启动参考聚合服务
 ```
 
-`tests/integration.mjs` 在隔离的 cordis `Context` 中加载插件的 `apply()`，驱动模拟的 `session/event` 事件流（`request/header` → `assistant/chunk` → `assistant/message`），断言账本行的时间/速度/路由/工作区字段、HTTP 路由响应，并起一个临时参考服务验证增量推送、水位持久化与远程代理查询。需要本机存在 DSH profile 安装（用于定位 `@deepseek-ai/cordis`），否则自动跳过。
+`tests/integration.mjs` 在隔离的 cordis `Context` 中加载插件的 `apply()`，驱动模拟的 `session/event` 事件流（既含 format v2+ 的 `step/start` → `request/header` → 内嵌流 `assistant/message` → `tool/result` 工具循环，也覆盖旧版 `assistant/chunk` 事件流），断言账本行的时间/速度/路由/工作区字段、HTTP 路由响应，并起一个临时参考服务验证增量推送、水位持久化与远程代理查询。需要本机存在 DSH profile 安装（用于定位 `@deepseek-ai/cordis`），否则自动跳过。
 
 ## 兼容性
 
