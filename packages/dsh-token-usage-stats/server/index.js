@@ -144,20 +144,52 @@ function summarize(entries) {
       speedSum += entry.outputTokensPerSec
       speedCount += 1
     }
-    const provider = byProvider.get(entry.provider) ?? { calls: 0, totalTokens: 0 }
+    const provider = byProvider.get(entry.provider) ?? { calls: 0, totalTokens: 0, durationMs: 0, durationCount: 0, firstTokenMs: 0, firstTokenCount: 0, outputTokensPerSec: 0, speedCount: 0 }
     provider.calls += 1
     provider.totalTokens += entry.totalTokens
+    if (typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs)) {
+      provider.durationMs += entry.durationMs
+      provider.durationCount += 1
+    }
+    if (typeof entry.firstTokenMs === 'number' && Number.isFinite(entry.firstTokenMs)) {
+      provider.firstTokenMs += entry.firstTokenMs
+      provider.firstTokenCount += 1
+    }
+    if (typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec)) {
+      provider.outputTokensPerSec += entry.outputTokensPerSec
+      provider.speedCount += 1
+    }
     byProvider.set(entry.provider, provider)
 
     const modelKey = `${entry.provider}/${entry.model}`
-    const model = byModel.get(modelKey) ?? { calls: 0, totalTokens: 0 }
+    const model = byModel.get(modelKey) ?? { calls: 0, totalTokens: 0, durationMs: 0, durationCount: 0, firstTokenMs: 0, firstTokenCount: 0, outputTokensPerSec: 0, speedCount: 0 }
     model.calls += 1
     model.totalTokens += entry.totalTokens
+    if (typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs)) {
+      model.durationMs += entry.durationMs
+      model.durationCount += 1
+    }
+    if (typeof entry.firstTokenMs === 'number' && Number.isFinite(entry.firstTokenMs)) {
+      model.firstTokenMs += entry.firstTokenMs
+      model.firstTokenCount += 1
+    }
+    if (typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec)) {
+      model.outputTokensPerSec += entry.outputTokensPerSec
+      model.speedCount += 1
+    }
     byModel.set(modelKey, model)
   }
 
   const descending = (a, b) => b.totalTokens - a.totalTokens
   const avg = (sum, count) => (count === 0 ? undefined : Math.round((sum / count) * 10) / 10)
+  // Timing averages per breakdown row divide by the rows that actually
+  // reported the field, so legacy entries without timing do not dilute them.
+  const withTiming = (stats) => ({
+    ...stats,
+    avgDurationMs: avg(stats.durationMs, stats.durationCount),
+    avgFirstTokenMs: avg(stats.firstTokenMs, stats.firstTokenCount),
+    avgOutputTokensPerSec: avg(stats.outputTokensPerSec, stats.speedCount),
+  })
   return {
     totalCalls: entries.length,
     totalTokens,
@@ -169,8 +201,8 @@ function summarize(entries) {
     avgFirstTokenMs: avg(firstTokenSum, firstTokenCount),
     avgOutputTokensPerSec: avg(speedSum, speedCount),
     deviceIds: [...new Set(entries.map(entry => entry.deviceId).filter(Boolean))],
-    byProvider: [...byProvider].map(([provider, stats]) => ({ provider, ...stats })).sort(descending),
-    byModel: [...byModel].map(([model, stats]) => ({ model, ...stats })).sort(descending),
+    byProvider: [...byProvider].map(([provider, stats]) => ({ provider, ...withTiming(stats) })).sort(descending),
+    byModel: [...byModel].map(([model, stats]) => ({ model, ...withTiming(stats) })).sort(descending),
   }
 }
 
@@ -181,10 +213,21 @@ function timeSeries(entries, granularity, maxBuckets) {
     const key = bucketStart(ts, granularity)
     const bucket = byKey.get(key)
     if (bucket === undefined) {
-      byKey.set(key, { key, ts: key, tokens: entry.totalTokens ?? 0, calls: 1 })
+      byKey.set(key, {
+        key,
+        ts: key,
+        tokens: entry.totalTokens ?? 0,
+        calls: 1,
+        speedSum: typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec) ? entry.outputTokensPerSec : 0,
+        speedCount: typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec) ? 1 : 0,
+      })
     } else {
       bucket.tokens += entry.totalTokens ?? 0
       bucket.calls += 1
+      if (typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec)) {
+        bucket.speedSum += entry.outputTokensPerSec
+        bucket.speedCount += 1
+      }
     }
   }
 
@@ -201,7 +244,18 @@ function timeSeries(entries, granularity, maxBuckets) {
   const buckets = []
   for (let ts = firstBucket; ts <= lastBucket; ts = stepBucket(ts, 1, granularity)) {
     const existing = byKey.get(ts)
-    buckets.push(existing ?? { key: ts, ts, tokens: 0, calls: 0 })
+    if (existing !== undefined) {
+      // Average output speed of the calls inside this window; absent (null)
+      // when no call in the window reported one.
+      existing.avgTokensPerSec = existing.speedCount === 0
+        ? null
+        : Math.round((existing.speedSum / existing.speedCount) * 10) / 10
+      delete existing.speedSum
+      delete existing.speedCount
+      buckets.push(existing)
+    } else {
+      buckets.push({ key: ts, ts, tokens: 0, calls: 0, avgTokensPerSec: null })
+    }
   }
   buckets.reverse()
   return { granularity, buckets }
