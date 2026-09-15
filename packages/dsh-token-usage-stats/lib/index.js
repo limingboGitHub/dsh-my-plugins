@@ -82,9 +82,29 @@ function totalOf(usage) {
 }
 
 /**
+ * The per-call decode span that a speed reading is derived from, or undefined
+ * when the call's timing facts cannot support one. Only calls that report both
+ * a first-token time and a duration contribute, so legacy rows without timing
+ * never dilute the speed figures.
+ * @param entry - one ledger row.
+ * @returns the row's decode span in ms, or undefined.
+ */
+function decodeMsOf(entry) {
+  if (typeof entry.durationMs !== 'number' || !Number.isFinite(entry.durationMs)) return undefined
+  if (typeof entry.firstTokenMs !== 'number' || !Number.isFinite(entry.firstTokenMs)) return undefined
+  const decodeMs = entry.durationMs - entry.firstTokenMs
+  return decodeMs > 0 ? decodeMs : undefined
+}
+
+/**
  * Aggregate ledger entries by provider and by model. Timing fields are
  * averaged over the entries that carry them; a range cut from legacy rows
- * without the fields simply omits the corresponding average.
+ * without the fields simply omits the corresponding average. Output speed is
+ * the aggregate ratio `Σ outputTokens / Σ decode span` over the calls that
+ * carry both — the same definition the DSH native session stats use — so a
+ * single call whose first token lands near its end (a tool-call-only reply,
+ * for example) cannot inflate the reading the way an arithmetic mean of
+ * per-call speeds would.
  * @param entries - every recorded model call.
  * @returns totals plus per-provider and per-model breakdowns.
  */
@@ -100,8 +120,8 @@ function summarize(entries) {
   let durationCount = 0
   let firstTokenSum = 0
   let firstTokenCount = 0
-  let speedSum = 0
-  let speedCount = 0
+  let decodeMsSum = 0
+  let decodeTokensSum = 0
 
   for (const entry of entries) {
     totalTokens += entry.totalTokens ?? 0
@@ -117,11 +137,12 @@ function summarize(entries) {
       firstTokenSum += entry.firstTokenMs
       firstTokenCount += 1
     }
-    if (typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec)) {
-      speedSum += entry.outputTokensPerSec
-      speedCount += 1
+    const decodeMs = decodeMsOf(entry)
+    if (decodeMs !== undefined && typeof entry.outputTokens === 'number' && entry.outputTokens > 0) {
+      decodeMsSum += decodeMs
+      decodeTokensSum += entry.outputTokens
     }
-    const provider = byProvider.get(entry.provider) ?? { calls: 0, totalTokens: 0, durationMs: 0, durationCount: 0, firstTokenMs: 0, firstTokenCount: 0, outputTokensPerSec: 0, speedCount: 0 }
+    const provider = byProvider.get(entry.provider) ?? { calls: 0, totalTokens: 0, durationMs: 0, durationCount: 0, firstTokenMs: 0, firstTokenCount: 0, decodeMs: 0, decodeTokens: 0 }
     provider.calls += 1
     provider.totalTokens += entry.totalTokens
     if (typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs)) {
@@ -132,14 +153,14 @@ function summarize(entries) {
       provider.firstTokenMs += entry.firstTokenMs
       provider.firstTokenCount += 1
     }
-    if (typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec)) {
-      provider.outputTokensPerSec += entry.outputTokensPerSec
-      provider.speedCount += 1
+    if (decodeMs !== undefined && typeof entry.outputTokens === 'number' && entry.outputTokens > 0) {
+      provider.decodeMs += decodeMs
+      provider.decodeTokens += entry.outputTokens
     }
     byProvider.set(entry.provider, provider)
 
     const modelKey = `${entry.provider}/${entry.model}`
-    const model = byModel.get(modelKey) ?? { calls: 0, totalTokens: 0, durationMs: 0, durationCount: 0, firstTokenMs: 0, firstTokenCount: 0, outputTokensPerSec: 0, speedCount: 0 }
+    const model = byModel.get(modelKey) ?? { calls: 0, totalTokens: 0, durationMs: 0, durationCount: 0, firstTokenMs: 0, firstTokenCount: 0, decodeMs: 0, decodeTokens: 0 }
     model.calls += 1
     model.totalTokens += entry.totalTokens
     if (typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs)) {
@@ -150,22 +171,28 @@ function summarize(entries) {
       model.firstTokenMs += entry.firstTokenMs
       model.firstTokenCount += 1
     }
-    if (typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec)) {
-      model.outputTokensPerSec += entry.outputTokensPerSec
-      model.speedCount += 1
+    if (decodeMs !== undefined && typeof entry.outputTokens === 'number' && entry.outputTokens > 0) {
+      model.decodeMs += decodeMs
+      model.decodeTokens += entry.outputTokens
     }
     byModel.set(modelKey, model)
   }
 
   const descending = (a, b) => b.totalTokens - a.totalTokens
   const avg = (sum, count) => (count === 0 ? undefined : Math.round((sum / count) * 10) / 10)
+  // Speed is the aggregate ratio over decode-sampled calls, matching the DSH
+  // native session stats definition (Σ tokens / Σ decode ms), rounded to one
+  // decimal. It is undefined when no call in the cut carries a decode span.
+  const tokensPerSec = (decodeMs, decodeTokens) => (decodeMs === 0 || decodeTokens === 0
+    ? undefined
+    : Math.round((decodeTokens / decodeMs) * 1000 * 10) / 10)
   // Timing averages per breakdown row divide by the rows that actually
   // reported the field, so legacy entries without timing do not dilute them.
   const withTiming = (stats) => ({
     ...stats,
     avgDurationMs: avg(stats.durationMs, stats.durationCount),
     avgFirstTokenMs: avg(stats.firstTokenMs, stats.firstTokenCount),
-    avgOutputTokensPerSec: avg(stats.outputTokensPerSec, stats.speedCount),
+    avgOutputTokensPerSec: tokensPerSec(stats.decodeMs, stats.decodeTokens),
   })
   return {
     totalCalls: entries.length,
@@ -176,7 +203,7 @@ function summarize(entries) {
     cacheWriteTokens,
     avgDurationMs: avg(durationSum, durationCount),
     avgFirstTokenMs: avg(firstTokenSum, firstTokenCount),
-    avgOutputTokensPerSec: avg(speedSum, speedCount),
+    avgOutputTokensPerSec: tokensPerSec(decodeMsSum, decodeTokensSum),
     deviceIds: [...new Set(entries.map(entry => entry.deviceId).filter(Boolean))],
     byProvider: [...byProvider].map(([provider, stats]) => ({ provider, ...withTiming(stats) })).sort(descending),
     byModel: [...byModel].map(([model, stats]) => ({ model, ...withTiming(stats) })).sort(descending),
@@ -342,21 +369,27 @@ function timeSeries(entries, granularity, maxBuckets) {
     const ts = typeof entry.ts === 'number' ? entry.ts : 0
     const key = bucketStart(ts, granularity)
     const bucket = byKey.get(key)
+    // Bucket speed is the aggregate ratio Σ outputTokens / Σ decode span of
+    // the calls inside the window (mirroring summarize), NOT an arithmetic
+    // mean of per-call speeds: one tool-call-only reply whose first token
+    // lands near its end would otherwise dominate a whole day's bar.
+    const decodeMs = decodeMsOf(entry)
+    const sampled = decodeMs !== undefined && typeof entry.outputTokens === 'number' && entry.outputTokens > 0
     if (bucket === undefined) {
       byKey.set(key, {
         key,
         ts: key,
         tokens: entry.totalTokens ?? 0,
         calls: 1,
-        speedSum: typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec) ? entry.outputTokensPerSec : 0,
-        speedCount: typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec) ? 1 : 0,
+        decodeMs: sampled ? decodeMs : 0,
+        decodeTokens: sampled ? entry.outputTokens : 0,
       })
     } else {
       bucket.tokens += entry.totalTokens ?? 0
       bucket.calls += 1
-      if (typeof entry.outputTokensPerSec === 'number' && Number.isFinite(entry.outputTokensPerSec)) {
-        bucket.speedSum += entry.outputTokensPerSec
-        bucket.speedCount += 1
+      if (sampled) {
+        bucket.decodeMs += decodeMs
+        bucket.decodeTokens += entry.outputTokens
       }
     }
   }
@@ -375,13 +408,13 @@ function timeSeries(entries, granularity, maxBuckets) {
   for (let ts = firstBucket; ts <= lastBucket; ts = stepBucket(ts, 1, granularity)) {
     const existing = byKey.get(ts)
     if (existing !== undefined) {
-      // Average output speed of the calls inside this window; absent (null)
+      // Aggregate output speed of the calls inside this window; absent (null)
       // when no call in the window reported one.
-      existing.avgTokensPerSec = existing.speedCount === 0
+      existing.avgTokensPerSec = existing.decodeMs === 0 || existing.decodeTokens === 0
         ? null
-        : Math.round((existing.speedSum / existing.speedCount) * 10) / 10
-      delete existing.speedSum
-      delete existing.speedCount
+        : Math.round((existing.decodeTokens / existing.decodeMs) * 1000 * 10) / 10
+      delete existing.decodeMs
+      delete existing.decodeTokens
       buckets.push(existing)
     } else {
       buckets.push({ key: ts, ts, tokens: 0, calls: 0, avgTokensPerSec: null })

@@ -162,6 +162,11 @@ async function main() {
   check('summary route 200', summaryAll.status === 200)
   check('summary totals', summaryAll.json.totalCalls === 4 && summaryAll.json.totalTokens === 310, JSON.stringify(summaryAll.json))
   check('summary includes device id', Array.isArray(summaryAll.json.deviceIds) && summaryAll.json.deviceIds.length === 1)
+  // Aggregate speed over decode-sampled rows of p1/m3 (row3 + the tool-loop row4):
+  // decode (5000-1000) + (2000-500) = 5500ms, tokens 40 + 20 = 60 -> 10.9 tok/s.
+  const modelM3 = summaryAll.json.byModel?.find(row => row.model === 'p1/m3')
+  check('summary byModel speed is the aggregate ratio', modelM3 !== undefined && Math.abs(modelM3.avgOutputTokensPerSec - 10.9) < 0.1,
+    `got ${modelM3?.avgOutputTokensPerSec}, expected ~10.9`)
 
   const summaryAugust = await callRoute(webServer, '/api/token-usage-stats', '?range=1970-01')
   check('YYYY-MM range filters to month', summaryAugust.json.totalCalls === 4 && summaryAugust.json.totalTokens === 310, `calls=${summaryAugust.json.totalCalls}`)

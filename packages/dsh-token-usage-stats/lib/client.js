@@ -936,7 +936,7 @@ window.__ModuleLoader__.load({
 							button("sp-month", "按月", granularity === "month", () => { setGranularity("month"); })
 						)
 					),
-					h("div", { style: PANEL_DESC }, `${granularity === "day" ? "每天" : "每月"}的平均输出速度（tok/s），用于比较不同日期的快慢；无速度数据的时间段显示为基线。`),
+					h("div", { style: PANEL_DESC }, `${granularity === "day" ? "每天" : "每月"}的输出速度（tok/s），按该时段"总输出 tokens ÷ 总解码耗时"聚合，用于比较不同日期的快慢；无速度数据的时间段显示为基线。`),
 					chartReady
 						? SpeedTrendChart(series.buckets, formatBucket, labelEvery)
 						: h("div", { style: { padding: "18px", opacity: 0.6 } }, "正在加载速度趋势…")
@@ -987,7 +987,7 @@ window.__ModuleLoader__.load({
 
 				const speedRankPanel = h("div", { style: PANEL },
 					h("h3", { style: PANEL_TITLE }, "模型输出速度排名"),
-					h("div", { style: PANEL_DESC }, "按平均输出速度（tok/s）从快到慢排序；首字延迟与平均耗时越低越快。旧记录无速度数据，显示为 —。"),
+					h("div", { style: PANEL_DESC }, "按输出速度（tok/s，总输出 tokens ÷ 总解码耗时）从快到慢排序；首字延迟与平均耗时越低越快。旧记录无速度数据，显示为 —。"),
 					SpeedRankTable(summary.byModel ?? [])
 				);
 
@@ -1005,8 +1005,8 @@ window.__ModuleLoader__.load({
 						card("输入", compact(summary.inputTokens)),
 						card("输出", compact(summary.outputTokens)),
 						card("缓存命中", compact(summary.cacheReadTokens)),
-						card("平均输出速度", summary.avgOutputTokensPerSec == null ? "—" : `${num(summary.avgOutputTokensPerSec)} tok/s`,
-							summary.avgOutputTokensPerSec == null ? "新记录起统计" : null),
+						card("输出速度", summary.avgOutputTokensPerSec == null ? "—" : `${num(summary.avgOutputTokensPerSec)} tok/s`,
+							summary.avgOutputTokensPerSec == null ? "新记录起统计" : "总输出 tokens ÷ 总解码耗时"),
 						card("平均首字延迟", summary.avgFirstTokenMs == null ? "—" : `${secs(summary.avgFirstTokenMs)} s`,
 							summary.avgFirstTokenMs == null ? "新记录起统计" : null),
 						card("平均单次耗时", summary.avgDurationMs == null ? "—" : `${secs(summary.avgDurationMs)} s`,

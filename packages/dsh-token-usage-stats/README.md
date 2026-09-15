@@ -13,9 +13,9 @@
 - **各模型每日/每月用量堆叠趋势图**，Top 6 模型 + 其余合并，图例着色
 - **自然月历热力图**：按真实日历布局显示所选月份的每日消耗，可前后翻月，不再偏移错位
 - 饼图展示模型用量占比 Top 10 + 其余合并，**图例与悬停提示带百分比**；调色板为柔和低饱和 12 色（无刺眼的大红大黄）
-- 卡片新增**平均输出速度（tok/s）、平均首字延迟、平均单次耗时**；汇总卡片含输入 / 输出 / 缓存命中（缓存写入在当前提供商无数据，未展示）
-- **模型输出速度排名面板**：按平均输出速度降序，附带首字延迟与平均耗时，可直接比较各模型快慢
-- **输出速度趋势面板**：按天 / 按月展示每个时间段的平均输出速度（tok/s），用于比较不同日期的速度差异
+- 卡片新增**输出速度（tok/s）、平均首字延迟、平均单次耗时**；汇总卡片含输入 / 输出 / 缓存命中（缓存写入在当前提供商无数据，未展示）
+- **模型输出速度排名面板**：按输出速度降序（`总输出 tokens ÷ 总解码耗时` 聚合，而非各次调用速度的算术平均），附带首字延迟与平均耗时，可直接比较各模型快慢
+- **输出速度趋势面板**：按天 / 按月展示每个时间段的输出速度（tok/s，同样按总量比值聚合），用于比较不同日期的速度差异
 - **多设备远程汇总**：可在设置面板内直接配置 `remoteUrl` 与鉴权 token（无需改 cordis 配置）；账本增量推送到远程服务（按 `deviceId` 隔离存储、可跨设备聚合），面板可切换「本机 / 远程汇总」数据源，并展示同步状态（待同步条数、上次同步时间、失败原因）
 - 设备标识自动生成 UUID 并持久化，可用配置覆盖
 - 大数字自动换算单位（`k / M / B / T`），卡片、表格、图例、悬停提示统一缩写
@@ -70,7 +70,7 @@ dsh plugin --profile web remove @lmber/dsh-token-usage-stats
 ```
 
 - `totalTokens` 是计费 token 总量：`inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`，四项互不重叠，其中 `inputTokens` 只含未命中缓存的输入；`reasoningTokens` 已包含在 `outputTokens` 内，不重复计入。
-- `ts` 取**会话事件自身的 `time` 字段**（精确到每次调用的完成时刻）。计时指标自 v0.4.3 起按当前 DSH 会话格式推导：每次调用的起点锚定在最近的 `step/start` / `request/header`（工具循环中会被 `tool/result` / `assistant/attempt` 推进），首字时间取自 `assistant/message` 内嵌流（format v2+，`text-chunks` / `reasoning-chunks` / `tool-call-chunks` 的首个 token 记录）与 `assistant/message` 完成时间的差值，分别得到 `durationMs`（请求发出到完成）与 `firstTokenMs`（首字延迟）、`outputTokensPerSec`（输出速度）。旧版本 DSH 的 `assistant/chunk` 事件流仍受支持。
+- `ts` 取**会话事件自身的 `time` 字段**（精确到每次调用的完成时刻）。计时指标自 v0.4.3 起按当前 DSH 会话格式推导：每次调用的起点锚定在最近的 `step/start` / `request/header`（工具循环中会被 `tool/result` / `assistant/attempt` 推进），首字时间取自 `assistant/message` 内嵌流（format v2+，`text-chunks` / `reasoning-chunks` / `tool-call-chunks` 的首个 token 记录）与 `assistant/message` 完成时间的差值，分别得到 `durationMs`（请求发出到完成）与 `firstTokenMs`（首字延迟）、`outputTokensPerSec`（本次调用的输出速度，`outputTokens ÷ (durationMs − firstTokenMs)`）。旧版本 DSH 的 `assistant/chunk` 事件流仍受支持。账本行保留每次调用的原始速度；**面板与接口展示的速度是聚合值**（`Σ输出 tokens ÷ Σ解码耗时`，与 DSH 原生会话统计一致），单个「首字几乎等于完成时间」的调用不会拉高整体读数。
 - v0.2.0 及更早的记录没有 `v` 与速度/设备字段，读取时自动兼容；速度类指标只在有新字段的记录上统计。
 
 账本是纯 JSONL，可以直接用其他工具分析：
@@ -144,9 +144,9 @@ GET /api/token-usage-stats/series?granularity=day|hour|month&limit=N&source=
 GET /api/token-usage-stats/series-by-model?granularity=day|hour|month&limit=N&source=
 ```
 
-- 返回**连续窗口**：窗口内无记录的桶为 `{ tokens: 0, calls: 0 }`，柱状图因此不跳天。`day` 窗口止于今天，`month` 止于本月，`limit` 只返回最新 N 桶（默认按最早记录起算）。每个桶额外携带 `avgTokensPerSec`（该窗口内所有调用的平均输出速度；无速度数据时为 `null`）。
+- 返回**连续窗口**：窗口内无记录的桶为 `{ tokens: 0, calls: 0 }`，柱状图因此不跳天。`day` 窗口止于今天，`month` 止于本月，`limit` 只返回最新 N 桶（默认按最早记录起算）。每个桶额外携带 `avgTokensPerSec`（该窗口内所有调用的输出速度，按 `Σ输出 tokens ÷ Σ解码耗时` 聚合；无速度数据时为 `null`）。
 - `series-by-model` 返回 `{ granularity, buckets, series }`，所有模型共享同一窗口便于对齐。
-- 汇总接口的 `byProvider` / `byModel` 每行额外携带 `avgOutputTokensPerSec`、`avgFirstTokenMs`、`avgDurationMs`（仅统计有对应数据的行）。
+- 汇总接口的 `byProvider` / `byModel` 每行额外携带 `avgOutputTokensPerSec`、`avgFirstTokenMs`、`avgDurationMs`（仅统计有对应数据的行）。`avgOutputTokensPerSec` 与 DSH 原生会话统计同义：`Σ输出 tokens ÷ Σ(durationMs − firstTokenMs)`，首字延迟与完成时间几乎重合的调用（如纯工具调用响应）不会像"各调用速度算术平均"那样把读数拉高。
 
 设备与同步状态：
 
@@ -187,6 +187,8 @@ node server/index.js          # 启动参考聚合服务
 ## 已知限制
 
 - 统计基于插件安装后产生的记录，装之前的历史调用无法追溯；速度类指标自 v0.4.0 起才有（旧记录显示「—」）。
+- 展示的速度是**聚合值**（`Σ输出 tokens ÷ Σ解码耗时`）；账本行保留每次调用原始速度（`outputTokensPerSec`），需要逐次分析时直接读账本。
+- 单次调用若「首字时间」记录的流式片段极少（如纯工具调用响应被提供商缓冲到结尾才吐出），其 `durationMs − firstTokenMs` 会非常小、单次 `outputTokensPerSec` 会异常高——这是记录本身的真实时序，聚合展示已消除其影响；若需要单次速度请以账本行为准并结合 `firstTokenMs/durationMs` 判断。
 - 账本只追加不轮转，长期使用会持续增长，需要时自行归档。
 - 面板在进入或切换筛选时自动拉取数据（连接打开期间不轮询，需要最新数字可重新进入面板）。
 - 远程汇总视图反映的是「已成功推送到服务端」的数据，未推送行在「待同步」计数中可见。
