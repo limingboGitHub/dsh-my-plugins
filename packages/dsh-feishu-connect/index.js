@@ -11,13 +11,19 @@
 
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 export const name = 'feishu-bridge'
 
-export const inject = ['shell', 'fs', 'agents', 'timer', 'webServer', 'tools']
+// `shell` is intentionally absent: the helper subprocess is spawned with
+// node:child_process, so the plugin no longer depends on the host's shell
+// service. dsh 0.2.x removed ctx.shell.resolve/start (superseded by
+// ctx.subprocess), which made the previous version fail to load with
+// "ctx.shell.start is not a function".
+export const inject = ['fs', 'agents', 'timer', 'webServer', 'tools']
 
 // Absolute path of this package's helper process (the lark SDK long-connection
 // subprocess the plugin spawns). Resolved from import.meta.url so the package
@@ -495,9 +501,19 @@ export function apply(ctx) {
         // Injected FIRST: a resumed main session has no parent agent, and the
         // `!mainAgent` return below would otherwise skip the contract entirely.
         injectDeliveryContract(agentCtx, 'resume')
-        if (!mainAgent) return
         const presets = agentCtx.get('agentPresets')
         if (!presets) return
+        if (!mainAgent) {
+          // dsh 0.2.x drives the tool catalog from an agent preset: a resumed
+          // session with no parent agent gets no bash/fs tools unless it mounts
+          // one itself (0.1.x handed every agent a default tool set for free).
+          try {
+            await presets.mount(agentCtx)
+          } catch (error) {
+            console.log('[feishu] resumed session preset mount failed: ' + String(error && error.message || error))
+          }
+          return
+        }
         try {
           presets.composeFrom(agentCtx, mainAgent.ctx)
         } catch (error) {
@@ -814,8 +830,57 @@ export function apply(ctx) {
   }
 
   // ---- helper process lifecycle (one per bot) ----
-  function quoteArg(value) {
-    return '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
+  // Spawn the lark-SDK helper with node:child_process and wrap it in the small
+  // handle surface this plugin actually uses (status / readOutput / kill).
+  //
+  // Portability note: earlier versions used ctx.shell.resolve + ctx.shell.start.
+  // dsh 0.2.x dropped those in favour of ctx.subprocess.spawn, whose handle
+  // (terminate / waitForExit / collected) differs again — adapting to either
+  // host API would re-break on the next minor. A bare `node` child process is
+  // all the helper needs, so this relies on Node only and works across host
+  // versions. The wrapper keeps the status vocabulary the rest of this file
+  // already switches on: 'pending' -> 'running' -> 'completed' | 'killed'.
+  function createHelperProcess(appId, appSecret) {
+    let status = 'pending'
+    let output = ''
+    let killed = false
+
+    const child = spawn(process.execPath, [HELPER_PATH, appId, appSecret], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+
+    const sink = (chunk) => {
+      if (status === 'pending') status = 'running'
+      output += chunk.toString()
+    }
+    child.stdout?.on('data', sink)
+    child.stderr?.on('data', sink)
+    child.once('spawn', () => {
+      if (status === 'pending') status = 'running'
+    })
+    child.once('error', (error) => {
+      if (status === 'pending') status = 'running'
+      output += '\n' + String((error && error.message) || error) + '\n'
+      status = 'killed'
+    })
+    child.once('exit', () => {
+      status = killed ? 'killed' : 'completed'
+    })
+
+    return {
+      get status() { return status },
+      get pid() { return child.pid },
+      readOutput() {
+        const delta = output
+        output = ''
+        return { delta }
+      },
+      kill() {
+        killed = true
+        try { child.kill() } catch { /* ignore */ }
+      },
+    }
   }
 
   function spawnHelper(bot) {
@@ -829,10 +894,7 @@ export function apply(ctx) {
     if (bot.proc) {
       try { bot.proc.kill() } catch { /* ignore */ }
     }
-    const spec = ctx.shell.resolve({
-      command: 'node ' + quoteArg(HELPER_PATH) + ' ' + quoteArg(appId) + ' ' + quoteArg(appSecret),
-    })
-    bot.proc = ctx.shell.start(spec)
+    bot.proc = createHelperProcess(appId, appSecret)
     bot.procKey = key
     console.log('[feishu] helper spawned (app ' + appId + ')')
   }

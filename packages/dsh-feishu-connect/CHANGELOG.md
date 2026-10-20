@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.8.0] - 2026-10-20
+
+适配 dsh 0.2.x。三处改动缺一不可，只改其中任意一处仍会在 0.2.x 下失败（前两处是崩溃，
+第三处是不报错的静默故障）。
+
+### Added
+- **兼容 dsh 0.2.x**：`peerDependencies["@deepseek-ai/dsh-tools"]` 由 `^0.1.0-rc.5` 放宽为
+  `>=0.1.0-rc.5 <0.3.0-0`，同时覆盖 0.1.x 与 0.2.x。
+  dsh 0.2.x 在加载插件前会校验 peer 范围，范围不含当前版本时直接
+  `skipping profile bundle ... incompatible`，**根本不会执行到插件代码**，因此这一条必须与下面
+  两处代码改动一起发布。
+
+### Changed
+- **helper 进程改用 Node 原生 `child_process.spawn` 启动**：dsh 0.2.x 把 `ctx.shell` 的
+  `resolve()` + `start(spec)` 合并为 `execute()`，旧的两步式调用会抛
+  `TypeError: ctx.shell.start is not a function` 并导致启动崩溃循环。
+  helper 只需要运行一个 `node helper.cjs <appId> <appSecret>`，因此改为
+  `spawn(process.execPath, [HELPER_PATH, appId, appSecret])`，并用一个轻量 wrapper 维持原有的
+  handle 接口（`status`：`pending` → `running` → `completed` / `killed`、`readOutput()`
+  返回 `{ delta }`、`kill()`），**其余调用方零改动**。
+  `inject` 中移除不再需要的 `'shell'`。
+  这样做同时也摆脱了对 dsh 内部进程 seam 的依赖，后续 dsh 调整该 seam 时无需再改。
+
+### Fixed
+- **dsh 0.2.x 下恢复的会话没有任何工具**：`resumeDedicated` 的 `setup` 里 `if (!mainAgent) return`
+  会跳过 agent preset 挂载。dsh 0.1.x 为每个 Agent 自动装配工具集，缺这一步无影响；
+  0.2.x 改为**由 agent preset 驱动工具目录**，不挂载就是空工具集 —— 会话只剩
+  `working_directory`（dsh-base 全局注册）与本插件自己注册的发送类工具，
+  `bash` / `read` / `write` / `edit` 全部报 `unknown tool`，且**服务端无任何报错**。
+  现在与 `createDedicated` 保持一致，`!mainAgent` 时兜底 `presets.mount(agentCtx)`。
+
 ## [1.7.1] - 2025-XX-XX
 
 修复两个会话持久化问题：工作区归属（会话掉进「未分组」）与重启后无法回到上个会话。
